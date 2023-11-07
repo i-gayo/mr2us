@@ -3,6 +3,7 @@ import nibabel as nib
 from nibabel.processing import resample_to_output
 import os
 from torch.utils.data import DataLoader, Dataset
+import torch 
 
 from matplotlib import pyplot as plt
 # TODO : Implement dataloaders or use Yipeng's dataloaders 
@@ -27,22 +28,24 @@ class MR_US_dataset(Dataset):
         self.num_data = len(self.us_names)
         
         # Load items 
-        self.us_data = [nib.load(os.path.join(dir_name, mode, 'us_images', self.us_names [i])).squeeze().get_fdata() for i in range(self.num_data)]
-        self.us_labels = [nib.load(os.path.join(dir_name, mode,'us_labels', self.us_label_names[i])).get_fdata() for i in range(self.num_data)]
-        self.mri_data = [nib.load(os.path.join(dir_name, mode, 'mr_images', self.mri_names [i])).get_fdata() for i in range(self.num_data)]
-        self.mri_labels = [nib.load(os.path.join(dir_name, mode, 'mr_labels', self.mri_label_names [i])).get_fdata() for i in range(self.num_data)]
+        self.us_data = [torch.tensor(nib.load(os.path.join(dir_name, mode, 'us_images', self.us_names [i])).get_fdata().squeeze()) for i in range(self.num_data)]
+        self.us_labels = [torch.tensor(nib.load(os.path.join(dir_name, mode,'us_labels', self.us_label_names[i])).get_fdata()) for i in range(self.num_data)]
+        self.mri_data = [torch.tensor(nib.load(os.path.join(dir_name, mode, 'mr_images', self.mri_names [i])).get_fdata().squeeze()) for i in range(self.num_data)]
+        self.mri_labels = [torch.tensor(nib.load(os.path.join(dir_name, mode, 'mr_labels', self.mri_label_names [i])).get_fdata().squeeze()) for i in range(self.num_data)]
         
     def __len__(self):
         return self.num_data
         
     def __getitem__(self, idx):
-        #test = self.resample(0, 0)
         
+        upsample_us = self.resample(self.us_data[idx]) 
         return self.mri_data[idx], self.us_data[idx], self.mri_labels[idx], self.us_labels[idx]
     
-    def resample(self, img,label, dims = np.array([120, 128, 18])):
-        raise NotImplemented
+    def resample(self, img, dims = (120,128,128)):
+        upsample_method = torch.nn.Upsample(size = dims)
+        upsampled_img = upsample_method(img.unsqueeze(0).unsqueeze(0))
         
+        return upsampled_img
         
     
     
