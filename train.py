@@ -69,7 +69,7 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
             with torch.no_grad():
                 
                 # Compute SSIM 
-                ssim_metric = ssim(preds, us)
+                ssim_metric = ssim(preds.to(torch.float64).squeeze(), us)
             
             loss_train.append(loss)
             ssim_train.append(ssim_metric)
@@ -101,7 +101,7 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
 
                     # Compute loss and ssim metrics 
                     loss_eval = loss_fn(us, preds.float())
-                    ssim_eval = ssim(preds, us)
+                    ssim_eval = ssim(preds.to(torch.float64).squeeze(), us)
                     
                     # Save to val losses 
                     loss_val.append(loss_eval)
@@ -113,11 +113,7 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
                 
                 writer.add_scalar('Loss/val', mean_loss, epoch)
                 writer.add_scalar('SSIM/val', mean_ssim, epoch) 
-        
-        
-                    
-                        
-                        
+                                        
 if __name__ == '__main__':
     
     from torch.utils.data import DataLoader, Dataset
@@ -136,7 +132,8 @@ if __name__ == '__main__':
     # Define model  
     model = TransformNet()
     use_cuda = False 
+    save_folder = 'BASELINE'
     
-    train_transformnet(model, train_dataloader, val_dataloader, use_cuda = False)
+    train_transformnet(model, train_dataloader, val_dataloader, use_cuda = False, save_folder = save_folder)
     
     print('chicken')

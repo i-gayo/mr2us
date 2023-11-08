@@ -38,9 +38,14 @@ class MR_US_dataset(Dataset):
         
     def __getitem__(self, idx):
         
-        upsample_us = self.resample(self.us_data[idx]) 
-        upsample_us_labels = self.resample(self.us_labels[idx], label = True) 
-        return self.mri_data[idx], upsample_us.squeeze().squeeze(), self.mri_labels[idx], upsample_us_labels.squeeze().squeeze()
+        upsample_us = self.resample(self.us_data[idx])
+        upsample_us_labels = self.resample(self.us_labels[idx], label = True)
+        
+        # Add dimesion for "channel"
+        mr_data = self.mri_data[idx].unsqueeze(0)
+        mr_label = self.mri_labels[idx].unsqueeze(0)
+        
+        return mr_data, upsample_us.squeeze(), mr_label, upsample_us_labels.squeeze()
     
     def resample(self, img, dims = (120,128,128), label = False):
         upsample_method = torch.nn.Upsample(size = dims)
