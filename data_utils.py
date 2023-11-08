@@ -39,16 +39,20 @@ class MR_US_dataset(Dataset):
     def __getitem__(self, idx):
         
         upsample_us = self.resample(self.us_data[idx]) 
-        return self.mri_data[idx], self.us_data[idx], self.mri_labels[idx], self.us_labels[idx]
+        upsample_us_labels = self.resample(self.us_labels[idx], label = True) 
+        return self.mri_data[idx], upsample_us.squeeze().squeeze(), self.mri_labels[idx], upsample_us_labels.squeeze().squeeze()
     
-    def resample(self, img, dims = (120,128,128)):
+    def resample(self, img, dims = (120,128,128), label = False):
         upsample_method = torch.nn.Upsample(size = dims)
-        upsampled_img = upsample_method(img.unsqueeze(0).unsqueeze(0))
+        if label: 
+            # Choose only prostate gland label 
+            img_label = img[:,:,:,0]
+            upsampled_img = upsample_method(img_label.unsqueeze(0).unsqueeze(0))
+        else:
+            upsampled_img = upsample_method(img.unsqueeze(0).unsqueeze(0))
         
         return upsampled_img
-        
-    
-    
+  
 if __name__ == '__main__':
     
     data_folder = '/Users/ianijirahmae/Documents/DATASETS/mri_us_paired'
@@ -57,8 +61,11 @@ if __name__ == '__main__':
     
     for idx, (mr, us, mr_label, us_label) in enumerate(train_dataset):
         print(idx)
-        fig, axs = plt.subplots(1,2)
-        axs[0].imshow(mr[:,:,40,0])
-        axs[1].imshow(np.max(mr_label[:,:,:,0], axis =2))
+        fig, axs = plt.subplots(2,2)
+        axs[0,0].imshow(mr[:,:,40])
+        axs[0,1].imshow(mr_label[:,:,40,0])
+        axs[1,0].imshow(us[:,:,80])
+        axs[1,1].imshow(us_label[:,:,80])
         print('chicken')
+    
     print('chicken')
