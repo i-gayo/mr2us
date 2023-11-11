@@ -4,7 +4,7 @@ from data_utils import MR_US_dataset
 from torchmetrics.functional.image import structural_similarity_index_measure as ssim 
 from torch.utils.tensorboard import SummaryWriter
 import os 
-
+from torch.utils.data import DataLoader, Dataset
 
 class RMSE_loss():
     """
@@ -28,7 +28,7 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
     
     # Define hyperparameters 
     NUM_EPOCHS = 10000
-    LR = 1e-05 
+    LR = 1e-04 
     EVAL_STEPS = 10 # every 10 epochs, compute validation metircs! 
     
     # Define optimiser and loss functions 
@@ -41,6 +41,7 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
     
     for epoch in range(NUM_EPOCHS):
         
+        print(f"\n Epoch num : {epoch}")
         # Train model 
         model.train()
         
@@ -54,7 +55,9 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
             
             # 1. move data and model to gpu 
             if use_cuda: 
+                #print(f"Using CUDA")
                 mr, us = mr.cuda(), us.cuda()
+                model = model.cuda()
                 
             # 2. Obtain output of model 
             preds = model(mr.float())
@@ -69,7 +72,7 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
             with torch.no_grad():
                 
                 # Compute SSIM 
-                ssim_metric = ssim(preds.to(torch.float64).squeeze(), us)
+                ssim_metric = ssim(preds.to(torch.float64).squeeze(1), us)
             
             loss_train.append(loss)
             ssim_train.append(ssim_metric)
@@ -101,29 +104,29 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
 
                     # Compute loss and ssim metrics 
                     loss_eval = loss_fn(us, preds.float())
-                    ssim_eval = ssim(preds.to(torch.float64).squeeze(), us)
+                    ssim_eval = ssim(preds.to(torch.float64).squeeze(1), us)
                     
                     # Save to val losses 
                     loss_val.append(loss_eval)
-                    ssim_val.append(ssim_eval)
+                    #ssim_val.append(ssim_eval)
 
                 # Save to summary writer
                 mean_loss = torch.mean(torch.tensor(loss_val))
                 mean_ssim = torch.mean(torch.tensor(ssim_val))
-                
+                print(f"Epoch {epoch} : VALIDATION mean loss : {mean_loss} ssim : {mean_ssim}")
                 writer.add_scalar('Loss/val', mean_loss, epoch)
                 writer.add_scalar('SSIM/val', mean_ssim, epoch) 
                                         
 if __name__ == '__main__':
     
-    from torch.utils.data import DataLoader, Dataset
+
     from networks import TransformNet
     
     # DEFINE HYPERPARAMETERS
-    BATCH_SIZE = 8 
+    BATCH_SIZE = 2 
     
     # Define folder names and dataloaders 
-    data_folder = '/Users/ianijirahmae/Documents/DATASETS/mri_us_paired'
+    data_folder = './Data'
     train_dataset = MR_US_dataset(data_folder, mode = 'train')
     train_dataloader = DataLoader(train_dataset, batch_size = BATCH_SIZE, shuffle = True)
     val_dataset = MR_US_dataset(data_folder, mode = 'train')
@@ -131,9 +134,9 @@ if __name__ == '__main__':
     
     # Define model  
     model = TransformNet()
-    use_cuda = False 
+    use_cuda = True
     save_folder = 'BASELINE'
     
-    train_transformnet(model, train_dataloader, val_dataloader, use_cuda = False, save_folder = save_folder)
+    train_transformnet(model, train_dataloader, val_dataloader, use_cuda = True, save_folder = save_folder)
     
     print('chicken')
