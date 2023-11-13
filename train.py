@@ -28,9 +28,9 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
     
     # Define hyperparameters 
     NUM_EPOCHS = 10000
-    LR = 1e-04 
+    LR = 1e-05 
     EVAL_STEPS = 10 # every 10 epochs, compute validation metircs! 
-    
+    SAVE_STEPS = 100 #every 100 epochs save new model 
     # Define optimiser and loss functions 
     optimiser = torch.optim.Adam(model.parameters(), lr=LR)
     loss_fn = RMSE_loss()
@@ -38,7 +38,10 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
     # Define tensorboard and saving files 
     os.makedirs(save_folder, exist_ok=True)  #, exists_ok = True)
     writer = SummaryWriter(os.path.join(save_folder, 'runs')) 
-    
+
+    # Save initial losss 
+    best_loss = torch.tensor(1000000)
+
     for epoch in range(NUM_EPOCHS):
         
         print(f"\n Epoch num : {epoch}")
@@ -50,7 +53,8 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
         ssim_train = [] 
         loss_val = [] 
         ssim_val = [] 
-        
+         
+
         for idx, (mr, us, mr_label, us_label) in enumerate(train_dataset):
             
             # 1. move data and model to gpu 
@@ -105,7 +109,7 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
                     # Compute loss and ssim metrics 
                     loss_eval = loss_fn(us, preds.float())
                     ssim_eval = ssim(preds.to(torch.float64).squeeze(1), us)
-                    
+
                     # Save to val losses 
                     loss_val.append(loss_eval)
                     #ssim_val.append(ssim_eval)
@@ -116,6 +120,16 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
                 print(f"Epoch {epoch} : VALIDATION mean loss : {mean_loss} ssim : {mean_ssim}")
                 writer.add_scalar('Loss/val', mean_loss, epoch)
                 writer.add_scalar('SSIM/val', mean_ssim, epoch) 
+
+                if mean_loss < best_loss:
+                    print(f"Saving new model with loss : {mean_loss}")
+                    val_path = os.path.join(save_folder, 'best_val_model.pth')
+                    torch.save(model.state_dict(), val_path)
+                    best_loss = mean_loss 
+
+        if (epoch % SAVE_STEPS):
+            train_path = os.path.join(save_folder, 'train_model.pth')
+            torch.save(model.state_dict(), train_path
                                         
 if __name__ == '__main__':
     
