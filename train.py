@@ -143,7 +143,7 @@ if __name__ == '__main__':
     data_folder = './Data'
     train_dataset = MR_US_dataset(data_folder, mode = 'train')
     train_dataloader = DataLoader(train_dataset, batch_size = BATCH_SIZE, shuffle = True)
-    val_dataset = MR_US_dataset(data_folder, mode = 'train')
+    val_dataset = MR_US_dataset(data_folder, mode = 'val')
     val_dataloader = DataLoader(val_dataset, batch_size = 1)
     
     # Define model  
