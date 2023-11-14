@@ -112,7 +112,7 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
 
                     # Save to val losses 
                     loss_val.append(loss_eval)
-                    #ssim_val.append(ssim_eval)
+                    ssim_val.append(ssim_eval)
 
                 # Save to summary writer
                 mean_loss = torch.mean(torch.tensor(loss_val))
@@ -129,7 +129,7 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
 
         if (epoch % SAVE_STEPS):
             train_path = os.path.join(save_folder, 'train_model.pth')
-            torch.save(model.state_dict(), train_path
+            torch.save(model.state_dict(), train_path)
                                         
 if __name__ == '__main__':
     
@@ -149,7 +149,7 @@ if __name__ == '__main__':
     # Define model  
     model = TransformNet()
     use_cuda = True
-    save_folder = 'BASELINE'
+    save_folder = 'BASELINE_v2'
     
     train_transformnet(model, train_dataloader, val_dataloader, use_cuda = True, save_folder = save_folder)
     

@@ -72,5 +72,7 @@ if __name__ == '__main__':
         axs[1,0].imshow(us[:,:,80])
         axs[1,1].imshow(us_label[:,:,80])
         print('chicken')
-    
+        
+
+        
     print('chicken')

@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch 
 import torch.nn.functional as F
 
+
 class TransformNet(nn.Module):
     """
     A network that performs image-to-image translation / transformation 
@@ -128,9 +129,5 @@ class TransformNet(nn.Module):
         padded_decoder = F.pad(decoder, (pad_list), 'constant', 0)
         
         return padded_decoder 
-    
-class RegNet():
-    """
-    TODO : implement registraiton network 
-    """
-    pass
+   
+ 
