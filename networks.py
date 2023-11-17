@@ -132,14 +132,14 @@ class TransformNet(nn.Module):
         return padded_decoder 
 
 ######## networks for pix2pix / cGAN ########
-class UNet(nn.Module):
+class Generator(nn.Module):
     """
     A network that performs image-to-image translation / transformation 
     Network architecture is based on a 3D UNet 
     """
     
     def __init__(self, input_channel = 1, output_channel = 1, num_features = 32, activation_layer = 'tanh'):
-        super(UNet, self).__init__()
+        super(Generator, self).__init__()
 
         self.num_features = num_features 
         self.activation_layer = activation_layer
@@ -318,7 +318,6 @@ class Discriminator(nn.Module):
         """Standard forward."""
         return self.model(input)
 
-        
 # networks for diffusion models ########
 
 if __name__ == '__main__':
@@ -334,19 +333,21 @@ if __name__ == '__main__':
     val_dataset = MR_US_dataset(data_folder, mode = 'val')
     val_dataloader = DataLoader(val_dataset, batch_size = 1)
     
-    # Define model 
-    model = Discriminator(input_channel = 2) # channels being cat layers 
+    # Define models for training 
+    discriminator_net = Discriminator(input_channel = 1) # channels being cat layers 
+    generator_net = Generator(input_channel = 1)
     use_cuda = True
     save_folder = 'BASELINE_v2'
     
     for idx, (mr, us, mr_label, us_label) in enumerate(train_dataset):
         
         # stack along channel dimension!!!
-        combined_mr_us = torch.cat((mr.unsqueeze(0), us.unsqueeze(0).unsqueeze(0)), 1) # cat on second dcimension but not channel dimensin?
+        combined_mr_us = torch.cat((mr.unsqueeze(0), us.unsqueeze(0).unsqueeze(0)), 1) # cat on channel dimesnion 
         
         # Outputs 13 x 14 x 14 patches 
-        pred_us = model(combined_mr_us.float())
-    
+        discrim_labels = discriminator_net(combined_mr_us.float())
+        generated_img = generator_net(mr.unsqueeze(0).float())
+        
         print('chicken')
 
     
