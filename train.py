@@ -133,7 +133,7 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
 if __name__ == '__main__':
     
 
-    from networks import TransformNet
+    from networks.networks import TransformNet
     
     # DEFINE HYPERPARAMETERS
     BATCH_SIZE = 2 
