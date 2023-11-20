@@ -1,6 +1,6 @@
 import torch 
 import numpy as np 
-from data_utils import MR_US_dataset
+from utils.data_utils import MR_US_dataset
 from torchmetrics.functional.image import structural_similarity_index_measure as ssim 
 from torch.utils.tensorboard import SummaryWriter
 import os 
@@ -19,8 +19,7 @@ class RMSE_loss():
         rmse = torch.sqrt(torch.mean((gt - pred)**2))
         
         return rmse 
-    
-        
+          
 def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save_folder = 'model'):
     """
     A function that trains a model using dataset 
