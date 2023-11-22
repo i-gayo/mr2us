@@ -322,11 +322,12 @@ class Pix2pixTrainer():
 
 class LocalNetTrainer():
     
-    def __init__(self, model, lr, train_ds, val_ds, log_dir = 'regnet'):
+    def __init__(self, model, train_ds, val_ds, device, lr = 1e-05, log_dir = 'regnet'):
         
         self.model = model 
         self.optimiser = torch.optim.Adam(self.model.parameters(), lr=lr)
         self.log_dir = log_dir
+        self.device = device 
         os.makedirs(self.log_dir, exist_ok = True)
         
         # Load dataloaders
@@ -338,13 +339,19 @@ class LocalNetTrainer():
    
     def train(self, num_epochs = 1000, save_freq = 10):
 
-        self.save_configure()
-
         for epoch in range(1, num_epochs + 1):
-            self.set_train_mode()
+            
+            self.model.train()
+
+            # move model to device
+            self.model = self.model.to(self.device)
+            
             print('-'*10, 'training', '-'*10)
 
             for step, (mr, us, mr_labels, us_labels) in enumerate(self.train_loader):
+                
+                # move all to device
+                mr, us, mr_labels, us_labels = mr.to(self.device), us.to(self.device), mr_labels.to(self.device), us_labels.to(self.device)
                 
                 # Obtain dataloader images (mr, us volumes)
                 self.optimiser.zero_grad()
@@ -380,7 +387,7 @@ class LocalNetTrainer():
 
         return warped_us 
     
-    def compute_loss(self, fixed_img, ddfs, warpped_img, w_l2, w_sim, sim_measure = 'dice', prefix=''):
+    def compute_loss(self, fixed_img, ddfs, warpped_img, w_l2 = 0.5, w_sim=1.0, sim_measure = 'dice', prefix=''):
         
         fx_img = fixed_img
         
