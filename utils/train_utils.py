@@ -388,7 +388,7 @@ class LocalNetTrainer():
         L_Dreg_l2g = loss.l2_gradient(ddfs) * w_l2
         
         if sim_measure == 'dice':
-            L_sim = loss.binary_dice(fx_img, warpped_img)
+            L_sim = loss.single_scale_dice(fx_img, warpped_img)
         else: 
             # compute global mutual information between fixed image and warpped IMAGES
             L_sim = (1.5 - loss.global_mutual_information(fx_img, warpped_img))
