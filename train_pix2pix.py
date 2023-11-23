@@ -20,14 +20,14 @@ parser.add_argument('--log_dir',
                     help='Log dir to save results to')
 
 parser.add_argument('--num_epochs',
-                    metavar='NUM_EPOCHS',
+                    metavar='num_epochs',
                     type=str,
                     default='1000',
                     action = 'store',
                     help='How many epochs to play the games for')
 
 parser.add_argument('--batch_size',
-                    metavar='BATCH_SIZE',
+                    metavar='batch_size',
                     type=str,
                     default='2',
                     action = 'store',
@@ -38,11 +38,10 @@ parser.add_argument('--batch_size',
 args = parser.parse_args()
 
 if __name__ == '__main__':
-    
-    BATCH_SIZE = 2
+    os.environ["CUDA_VISIBLE_DEVICES"]="1"
     SAVE_FOLDER = args.log_dir
-    BATCH_SIZE = int(args.BATCH_SIZE)
-    NUM_EPOCHS = int(args.NUM_EPOCHS)
+    BATCH_SIZE = int(args.batch_size)
+    NUM_EPOCHS = int(args.num_epochs)
     
     # Load dataloaders, models 
     data_folder = './Data'
