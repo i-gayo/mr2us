@@ -4,6 +4,8 @@ import torch.nn as nn
 import torch 
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
+import mpmrireg.src.model.functions as smfunctions
+from mpmrireg.src.model import loss
 
 class RMSE_loss():
     """
@@ -317,3 +319,149 @@ class Pix2pixTrainer():
         discrim_loss = self.adversarial_loss(output_image, label)
         
         return discrim_loss 
+
+class LocalNetTrainer():
+    
+    def __init__(self, model, train_ds, val_ds, device, lr = 1e-05, log_dir = 'regnet'):
+        
+        self.model = model 
+        self.optimiser = torch.optim.Adam(self.model.parameters(), lr=lr)
+        self.log_dir = log_dir
+        self.device = device 
+        os.makedirs(self.log_dir, exist_ok = True)
+        
+        # Load dataloaders
+        self.train_loader = train_ds
+        self.val_loader = val_ds
+        
+        # Save metric
+        self.best_metric = 0 
+   
+    def train(self, num_epochs = 1000, save_freq = 10):
+
+        for epoch in range(1, num_epochs + 1):
+            
+            self.model.train()
+
+            # move model to device
+            self.model = self.model.to(self.device)
+            
+            print('-'*10, 'training', '-'*10)
+
+            for step, (mr, us, mr_labels, us_labels) in enumerate(self.train_loader):
+                
+                # move all to device
+                mr, us, mr_labels, us_labels = mr.to(self.device), us.to(self.device), mr_labels.to(self.device), us_labels.to(self.device)
+                
+                # Obtain dataloader images (mr, us volumes)
+                self.optimiser.zero_grad()
+                
+                # TODO : concat MR/US images 
+                mr_us = torch.cat([mr, us], dim=1).float()
+                
+                # Obtain DDF by obtaining input data
+                ddf = self.model.forward(mr_us)
+                ddf_img = ddf[1]
+                
+                # Warp masks (not input images) 
+                warped_moving_label = self.get_warped_images(us_labels, ddf_img)
+                
+                # Compute loss function using warped images and original images
+                global_loss = self.compute_loss(mr_labels, ddf_img, warped_moving_label)
+                
+                # Backpropagate loss functions ; take steps
+                global_loss.backward()
+                self.optimiser.step()
+
+            if epoch % save_freq == 0:
+                ckpt_path = os.path.join(self.log_dir, 'checkpoints')
+                os.makedirs(ckpt_path, exist_ok=True)
+                check_path = os.path.join(ckpt_path, f'Epoch-{epoch}.pt')
+                torch.save(self.model.state_dict(), check_path)
+                                
+            print('-'*10, 'validation', '-'*10)
+            self.validate(dataloader=self.val_loader, epoch=epoch)
+
+    def get_warped_images(self, move_label, ddf):
+
+        warped_us = smfunctions.warp3d(move_label, ddf)
+
+        return warped_us 
+    
+    def compute_loss(self, fixed_img, ddfs, warpped_img, w_l2 = 0.5, w_sim=1.0, sim_measure = 'dice', prefix=''):
+        
+        fx_img = fixed_img
+        
+        # Compute bending energy for regularising 
+        L_Dreg_l2g = loss.l2_gradient(ddfs) * w_l2
+        
+        if sim_measure == 'dice':
+            L_sim = loss.single_scale_dice(fx_img, warpped_img)
+        else: 
+            # compute global mutual information between fixed image and warpped IMAGES
+            L_sim = (1.5 - loss.global_mutual_information(fx_img, warpped_img))
+        
+        # Combined loss 
+        L_all = L_sim*w_sim + L_Dreg_l2g
+        
+        # Print similarity measure 
+        Info = f'epoch {self.epoch}, step {self.step+1}, L_All:{L_all:.3f}, L2R: {L_Dreg_l2g:.6f}, Isim: {L_sim:.3f}'
+        
+        print(prefix, Info)
+        
+        return L_all
+    
+    def validate(self, val_loader, epoch=None):
+        
+        self.model.eval()
+        
+        res_label = [] # for computing dice loss
+        res_img = [] # for computing global mutual information 
+        
+        with torch.no_grad():
+            
+            for idx, (mr, us, mr_labels, us_labels) in enumerate(val_loader):
+                
+                mr_us = torch.cat([mr, us], dim=1)
+                ddfs = self.model.forward(mr_us)
+                ddf_img = ddfs[1]
+                
+                # Warp labels 
+                wp_label = self.get_warpped_images(us_labels, ddf_img)
+                fx_label = mr_labels
+                
+                # Warp images
+                wp_img = self.get_warpped_images(us, ddf_img)
+                fx_img = mr 
+                
+                # Warp both images and labels and comptue dice for labels, and MI for imgs 
+                label_loss = loss.binary_dice(fx_label, wp_label)
+                img_loss = loss.global_mutual_information(fx_img, wp_img)
+                
+                # Compute results 
+                res_label.append(label_loss)
+                res_img.append(img_loss)
+            
+            # Labels
+            label_loss = torch.tensor(res_label)
+            mean_label, std_label = torch.mean(label_loss), torch.std(label_loss)
+            
+            # Compute mean for images 
+            img_loss = torch.tensor(res_img)
+            mean_img, std_img = torch.mean(img_loss), torch.std(img_loss)
+            
+            if mean_label > self.best_metric:
+                
+                print(f"Saving new best model, new best loss : {self.best_metric}")
+                self.best_metric = mean_label
+                
+                # Save best model so far 
+                ckpt_path = os.path.join(self.log_dir, 'checkpoints')
+                os.makedirs(ckpt_path, exist_ok=True)
+                check_path = os.path.join(ckpt_path, 'best_val_model.pth')
+                torch.save(self.model.state_dict(), check_path)
+                        
+            print(f'Result for images {mean_img} ± {std_img}')
+            print(f'Result for labels {mean_label} ± {std_label}')
+            
+            

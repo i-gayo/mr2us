@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch 
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
+import models.layers as layers # import model layers from Qianye's code 
 
 ######### simple transformnet based on unet architecture ########
 class TransformNet(nn.Module):
@@ -318,203 +319,93 @@ class Discriminator(nn.Module):
         """Standard forward."""
         return self.model(input)
 
-# networks for diffusion models ########
+####### networks for registration ########
 
-class Pix2pixTrainer():
+class LocalNet(nn.Module):
     """
-    Defines a pix2pix trainer, with loss functions for both generator, discriminator 
+    Code adapted from mpmrieg.src.model.networks localnet, but removed config details for easier implementation
     """
+    def __init__(self,input_shape, device, input_channel = 2, ddf_levels = [0, 1, 2, 3, 4], num_features = 32):
+        super(LocalNet, self).__init__()
+        self.input_shape = input_shape
+        self.ddf_levels = ddf_levels
+        self.device = device
 
-    def __init__(self, generator, discriminator, train_ds, val_ds, device, log_dir = 'pix2pix', lr_d = 1e-05, lr_g = 1e-05, lamda = 100):
-        """
-        Initializes the Pix2PixTrainer.
+        nc = [num_features*(2**i) for i in range(5)]
+        up_sz = self.calc_upsample_layer_output_size(self.input_shape, 4)
+        # print('up_sz', up_sz)
 
-        Parameters:
-        - generator (torch.nn.Module): The Pix2Pix generator network.
-        - discriminator (torch.nn.Module): The Pix2Pix discriminator network.
-        - train_ds (torch.utils.data.DataLoader): DataLoader for the training dataset.
-        - val_ds (torch.utils.data.DataLoader): DataLoader for the training dataset.
-        - device (str, optional): Device to use ('cuda' or 'cpu'). Default is 'cuda'.
-        - log_Dir (str, optional) : Folder to save results into for tensorboard writing 
-        - lr_d (float, optional): Learning rate for the optimizer. Default is 1e-05
-        - lr_g (float, optional): Learning rate for the optimizer. Default is 1e-05
-        - lamda (float, optional): Weight for the L1 loss term. Default is 100.
-        """
-        # Define cuda 
-        self.device = device 
-        self.log_dir = log_dir 
-        os.makedirs(log_dir, exist_ok=True)
-        
-        # Initialise sumnary writer and model paths 
-        self.writer = SummaryWriter(self.log_dir) 
-        self.gen_model_path = os.path.join(self.log_dir, 'gen_model.pth')
-        self.dis_model_path = os.path.join(self.log_dir, 'dis_model.pth')
-                
-        # Define generators / discriminators 
-        self.generator = generator.to(device)
-        self.discriminator = discriminator.to(device)
-        
-        # Define datasets 
-        self.train_ds = train_ds
-        self.val_ds = val_ds
-        
-        # Define loss functions
-        self.adversarial_loss = nn.BCELoss()
-        self.l1_loss_fn = nn.L1Loss()   
-        self.lamda = 100
-        
-        # Define optimisers 
-        self.D_opt = torch.optim.Adam(self.discriminator.parameters(), lr=lr_d)
-        self.G_opt = torch.optim.Adam(self.generator.parameters(), lr=lr_g)
+        self.downsample_block0 = layers.DownsampleBlock(inc=input_channel, outc=nc[0])
+        self.downsample_block1 = layers.DownsampleBlock(inc=nc[0], outc=nc[1])
+        self.downsample_block2 = layers.DownsampleBlock(inc=nc[1], outc=nc[2])
+        self.downsample_block3 = layers.DownsampleBlock(inc=nc[2], outc=nc[3])
+        self.conv_block = layers.Conv3dBlock(inc=nc[3], outc=nc[4])
 
-    def train(self, NUM_EPOCHS = 1000, save_freq = 10):
-        """
-        A function to train pix2pix modelss
-        """
+        self.upsample_block0 = layers.UpSampleBlock(inc=nc[4], outc=nc[3], output_size=up_sz[0])
+        self.upsample_block1 = layers.UpSampleBlock(inc=nc[3], outc=nc[2], output_size=up_sz[1])
+        self.upsample_block2 = layers.UpSampleBlock(inc=nc[2], outc=nc[1], output_size=up_sz[2])
+        self.upsample_block3 = layers.UpSampleBlock(inc=nc[1], outc=nc[0], output_size=up_sz[3])
+        self.ddf_fuse_layers = [layers.DDFFusion(inc=nc[4 - i], out_shape=self.input_shape).to(self.device) for i in self.ddf_levels]
+
+
+    def calc_upsample_layer_output_size(self, input_shape, num_downsample_layers=4):
+        shape = np.array(input_shape)
+        tmp = [list(shape//(2**i)) for i in range(num_downsample_layers)]
+        tmp.reverse()
+
+        # # Add channel depth and filter size to first two dimensions 
+        # for i in range(len(tmp)):
+        #     tmp[i][0] = 2
+        #     tmp[i][1] = round(256/(2**i))
         
-        # Define discriminator and generator optimisers, loss functions
+        return tmp 
+    
+    def forward(self, x):
+        f_down0, f_jc0 = self.downsample_block0(x)
+        f_down1, f_jc1 = self.downsample_block1(f_down0)
+        f_down2, f_jc2 = self.downsample_block2(f_down1)
+        f_down3, f_jc3 = self.downsample_block3(f_down2)
+        f_bottleneck = self.conv_block(f_down3)
+
+        # print(f_down0.shape, f_jc0.shape)
+        # print(f_down1.shape, f_jc1.shape)
+        # print(f_down2.shape, f_jc2.shape)
+        # print(f_down3.shape, f_jc3.shape)
+        # print(f_bottleneck.shape)
+
+        f_up0 = self.upsample_block0([f_jc3, f_bottleneck])
+        f_up1 = self.upsample_block1([f_jc2, f_up0])
+        f_up2 = self.upsample_block2([f_jc1, f_up1])
+        f_up3 = self.upsample_block3([f_jc0, f_up2])
+
+        # print('-'*20)
+        # print(f_up0.shape)
+        # print(f_up1.shape)
+        # print(f_up2.shape)
+        # print(f_up3.shape)
+
+        ddf0 = self.ddf_fuse_layers[0](f_bottleneck)
+        ddf1 = self.ddf_fuse_layers[1](f_up0)
+        ddf2 = self.ddf_fuse_layers[2](f_up1)
+        ddf3 = self.ddf_fuse_layers[3](f_up2)
+        ddf4 = self.ddf_fuse_layers[4](f_up3)
+
+        ddf = torch.sum(torch.stack([ddf0, ddf1, ddf2, ddf3, ddf4], axis=5), axis=5)
         
-        for epoch in range(1, NUM_EPOCHS):
-            
-            print(f"\n Epoch number : {epoch}")
-            D_loss_all, G_loss_all = [], [] 
-            
-            # Load datasets
-            for idx, (mr, us, mr_label, us_label) in enumerate(self.train_ds):
-                
-                mr, us = mr.to(self.device), us.to(self.device)
-                mr = mr.float()
-                us = us.float()
-                ##### Train discriminator #####
-                self.D_opt.zero_grad()
-                generated_img = self.generator(mr)
-                
-                # Compute loss with fake image 
-                fake_cond_img = torch.cat((mr, generated_img), 1)
-                D_fake = self.discriminator(fake_cond_img.detach())
-                fake_label = torch.zeros_like(D_fake).to(self.device)
-                D_fake_loss = self.discriminator_loss(D_fake, fake_label)
+        return f_bottleneck, ddf
 
-                # Compute loss with real image 
-                real_cond_img = torch.cat((mr, us), 1)
-                D_real = self.discriminator(real_cond_img) 
-                real_label = torch.ones_like(D_real).to(self.device)
-                D_real_loss = self.discriminator_loss(D_real, real_label)
-                
-                # Average discriminator loss 
-                D_combined_loss = (D_real_loss + D_fake_loss) / 2
-                D_loss_all.append(D_combined_loss)
-                D_combined_loss.backward()
-                self.D_opt.step()
-                
-                ##### Train generator with real labels #####
-                self.G_opt.zero_grad()
-                fake_img = self.generator(mr)    # Obtain fake img 
-                fake_gen_img = torch.cat((mr, fake_img), 1)
-                pred_label = self.discriminator(fake_gen_img)
-                
-                G_loss = self.generator_loss(fake_img, us, pred_label, real_label)
-                G_loss_all.append(G_loss)
-                
-                G_loss.backward()
-                self.G_opt.step()
-                
-                # Print discriminator loss and generator loss 
-                print(f"Epoch {epoch} : Discriminator loss {D_combined_loss} Generator loss {G_loss}")
-            
-            # Save model every save_freq episodes 
-            if epoch % save_freq: 
-                torch.save(self.generator.state_dict(), self.gen_model_path)
-                torch.save(self.discriminator.state_dict(), self.dis_model_path)
-                
-            # Compute mean loss for d and g
-            with torch.no_grad():
-                mean_d_loss = torch.mean(torch.tensor(D_loss_all))
-                mean_g_loss = torch.mean(torch.tensor(G_loss_all))
-            
-            # Print and log loss values 
-            print(f"Epoch finish training : mean d loss : {mean_d_loss} mean g loss : {mean_g_loss}")
-            self.log_metrics(epoch, mean_d_loss, mean_g_loss)
-        
-        # Close summary writer 
-        self.writer.close()
-
-    def log_metrics(self, epoch, d_loss, g_loss):
-        """
-        A function that logs loss values onto writer
-        """
-        self.writer.add_scalar('Discriminator_loss', d_loss, epoch)
-        self.writer.add_scalar('Generator_loss', g_loss, epoch)
-                        
-    def generate_samples(self, input_images, num_samples = 5):
-        """
-        Generates samples using the trained Pix2Pix generator.
-
-        Parameters:
-        - input_images (torch.Tensor): Input images for generating samples.
-        - num_samples (int, optional): Number of samples to generate. Default is 5.
-
-        Returns:
-        - torch.Tensor: Generated samples.
-        """
-        with torch.no_grad():
-            self.generator.eval()
-            input_images = input_images.to(self.device)
-            generated_images = self.generator(input_images)
-            self.generator.train()
-
-        # Return a few generated samples
-        return generated_images[:num_samples]
-                          
-    def generator_loss(self, gen_img, real_img, pred_label, real_label, lamda = 100):
-        """
-        Calculates the generator loss for a Pix2Pix GAN.
-
-        Parameters:
-        - gen_img (torch.Tensor): Generated image by the generator.
-        - real_img (torch.Tensor): Real image from the target domain.
-        - pred_label (torch.Tensor): Predictions of the discriminator for the generated image.
-        - real_label (torch.Tensor): Ground truth labels for real images.
-        - lamda (float, optional): Weight for the L1 loss term. Default is 100.
-
-        Returns:
-        - torch.Tensor: Total generator loss, combining adversarial and L1 losses.
-        """
-        
-        #adversarial_loss = nn.BCELoss()
-        #l1_loss_fn = nn.L1Loss()   
-        
-        gen_loss = self.adversarial_loss(pred_label, real_label)
-        l1_loss = self.l1_loss_fn(gen_img, real_img)
-        
-        total_loss = gen_loss + lamda*l1_loss 
-        
-        return total_loss
-
-    def discriminator_loss(self,output_image, label):
-        """
-        Calculates the discriminator loss for a Pix2Pix GAN.
-
-        Parameters:
-        - output_image (torch.Tensor): Output image produced by the generator.
-        - label (torch.Tensor): Ground truth labels for the corresponding images.
-
-        Returns:
-        - torch.Tensor: Discriminator loss based on the adversarial loss between
-        the generated output and the ground truth labels.
-        """
-        
-        #adversarial_loss = nn.BCELoss()
-        discrim_loss = self.adversarial_loss(output_image, label)
-        
-        return discrim_loss 
 
 if __name__ == '__main__':
     
-    from train import * 
+    from ..utils.data_utils import * 
     
     BATCH_SIZE = 2
-    
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+        
+    regnet = LocalNet([120,120,20], device = device)
     # Load dataloaders, models 
     data_folder = './Data'
     train_dataset = MR_US_dataset(data_folder, mode = 'train')
@@ -522,7 +413,9 @@ if __name__ == '__main__':
     val_dataset = MR_US_dataset(data_folder, mode = 'val')
     val_dataloader = DataLoader(val_dataset, batch_size = 1)
     
+    
     # Define models for training 
+    regnet = LocalNet([120,120,20], device = device)
     discriminator_net = Discriminator(input_channel = 2) # channels being cat layers 
     generator_net = Generator(input_channel = 1) # input is MR image only; output we want is US image 
     use_cuda = True
