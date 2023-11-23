@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch 
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
-import layers as layers # import model layers from Qianye's code 
+import models.layers as layers # import model layers from Qianye's code 
 
 ######### simple transformnet based on unet architecture ########
 class TransformNet(nn.Module):
@@ -353,8 +353,13 @@ class LocalNet(nn.Module):
         tmp = [list(shape//(2**i)) for i in range(num_downsample_layers)]
         tmp.reverse()
 
-        return tmp
+        # # Add channel depth and filter size to first two dimensions 
+        # for i in range(len(tmp)):
+        #     tmp[i][0] = 2
+        #     tmp[i][1] = round(256/(2**i))
         
+        return tmp 
+    
     def forward(self, x):
         f_down0, f_jc0 = self.downsample_block0(x)
         f_down1, f_jc1 = self.downsample_block1(f_down0)

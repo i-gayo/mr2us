@@ -55,7 +55,7 @@ if __name__ == "__main__":
     # obtain shape of input data
     mr, us, mr_label, us_label = train_dataset[0]
     mr_us = torch.cat((mr.unsqueeze(0),us.unsqueeze(0)), dim = 1)
-    input_shape = (mr_us.size())
+    input_shape = (mr_us.size()[-3:])
     
     # Obtain device 
     if torch.cuda.is_available():

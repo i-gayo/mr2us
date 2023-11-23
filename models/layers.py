@@ -15,6 +15,7 @@ class Conv3dBlock(nn.Module):
         nn.init.xavier_uniform_(self.conv.weight)
 
     def forward(self, x):
+        x = x.float()
         return self.act(self.bn(self.conv(x)))
 
 
@@ -36,6 +37,7 @@ class Deconv3d(nn.Module):
         out = self.act(self.bn(self.deconv(x)))
         if out.shape[-3:] != self.output_size:
             out = self.upsample_layer(out)
+        
         return out
 
 

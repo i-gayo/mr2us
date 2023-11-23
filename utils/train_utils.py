@@ -357,16 +357,17 @@ class LocalNetTrainer():
                 self.optimiser.zero_grad()
                 
                 # TODO : concat MR/US images 
-                mr_us = torch.cat([mr, us], dim=1)
+                mr_us = torch.cat([mr, us], dim=1).float()
                 
                 # Obtain DDF by obtaining input data
                 ddf = self.model.forward(mr_us)
+                ddf_img = ddf[1]
                 
                 # Warp masks (not input images) 
-                warped_moving_label = self.get_warped_images(us_labels, ddf)
+                warped_moving_label = self.get_warped_images(us_labels, ddf_img)
                 
                 # Compute loss function using warped images and original images
-                global_loss = self.compute_loss(mr_labels, ddf, warped_moving_label)
+                global_loss = self.compute_loss(mr_labels, ddf_img, warped_moving_label)
                 
                 # Backpropagate loss functions ; take steps
                 global_loss.backward()
@@ -423,13 +424,14 @@ class LocalNetTrainer():
                 
                 mr_us = torch.cat([mr, us], dim=1)
                 ddfs = self.model.forward(mr_us)
+                ddf_img = ddfs[1]
                 
                 # Warp labels 
-                wp_label = self.get_warpped_images(us_labels, ddfs)
+                wp_label = self.get_warpped_images(us_labels, ddf_img)
                 fx_label = mr_labels
                 
                 # Warp images
-                wp_img = self.get_warpped_images(us, ddfs)
+                wp_img = self.get_warpped_images(us, ddf_img)
                 fx_img = mr 
                 
                 # Warp both images and labels and comptue dice for labels, and MI for imgs 
