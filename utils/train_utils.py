@@ -336,11 +336,15 @@ class LocalNetTrainer():
         
         # Save metric
         self.best_metric = 0 
-   
+        
+        # Initialise sumnary writer and model paths 
+        self.results_dir = os.makedirs(os.path.join(self.log_dir, 'runs'), exist_ok = True)
+        self.writer = SummaryWriter(self.results_dir) 
+
     def train(self, num_epochs = 1000, save_freq = 10):
 
         for epoch in range(1, num_epochs + 1):
-            
+            print(f"\n Epoch num {epoch}")
             self.model.train()
 
             # move model to device
@@ -348,8 +352,13 @@ class LocalNetTrainer():
             
             print('-'*10, 'training', '-'*10)
 
+            epoch_loss = [] 
+            epoch_l2 = [] 
+            epoch_dice = [] 
+            self.epoch = epoch 
+            
             for step, (mr, us, mr_labels, us_labels) in enumerate(self.train_loader):
-                
+                self.step = step 
                 # move all to device
                 mr, us, mr_labels, us_labels = mr.to(self.device), us.to(self.device), mr_labels.to(self.device), us_labels.to(self.device)
                 
@@ -367,18 +376,28 @@ class LocalNetTrainer():
                 warped_moving_label = self.get_warped_images(us_labels, ddf_img)
                 
                 # Compute loss function using warped images and original images
-                global_loss = self.compute_loss(mr_labels, ddf_img, warped_moving_label)
-                
+                global_loss, L_sim, L2 = self.compute_loss(mr_labels, ddf_img, warped_moving_label)
+                #print(f"Epoch {epoch} Step num {step} global loss {global_loss.detach().item()} ")
                 # Backpropagate loss functions ; take steps
                 global_loss.backward()
                 self.optimiser.step()
-
+                
+                # Add loss values to saving values
+                epoch_loss.append(global_loss.detach().clone())
+                epoch_l2.append(L2)
+                epoch_dice.append(L_sim)
+                
             if epoch % save_freq == 0:
                 ckpt_path = os.path.join(self.log_dir, 'checkpoints')
                 os.makedirs(ckpt_path, exist_ok=True)
                 check_path = os.path.join(ckpt_path, f'Epoch-{epoch}.pt')
                 torch.save(self.model.state_dict(), check_path)
-                                
+            
+            # Save mean l2, loss and dice to each value 
+            self.writer.add_scalar('train/reg_loss', torch.mean(epoch_loss), epoch)
+            self.writer.add_scalar('train/l2_loss', torch.mean(epoch_l2), epoch)
+            self.writer.add_scalar('train/dice_loss', torch.mean(epoch_dice), epoch)    
+                    
             print('-'*10, 'validation', '-'*10)
             self.validate(dataloader=self.val_loader, epoch=epoch)
 
@@ -409,7 +428,7 @@ class LocalNetTrainer():
         
         print(prefix, Info)
         
-        return L_all
+        return L_all, L_sim.detach().clone(), L_Dreg_l2g.detach().clone()
     
     def validate(self, val_loader, epoch=None):
         
@@ -450,6 +469,10 @@ class LocalNetTrainer():
             img_loss = torch.tensor(res_img)
             mean_img, std_img = torch.mean(img_loss), torch.std(img_loss)
             
+            # Save to writer
+            self.writer.add_scalar('val/img_loss', mean_img, epoch)
+            self.writer.add_scalar('val/label_loss', mean_label, epoch)
+            
             if mean_label > self.best_metric:
                 
                 print(f"Saving new best model, new best loss : {self.best_metric}")
@@ -464,4 +487,5 @@ class LocalNetTrainer():
             print(f'Result for images {mean_img} ± {std_img}')
             print(f'Result for labels {mean_label} ± {std_label}')
             
-            
+
+              

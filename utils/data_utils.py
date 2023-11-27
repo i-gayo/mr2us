@@ -4,7 +4,8 @@ from nibabel.processing import resample_to_output
 import os
 from torch.utils.data import DataLoader, Dataset
 import torch 
-
+import matplotlib
+matplotlib.use('TkAgg')
 from matplotlib import pyplot as plt
 # TODO : Implement dataloaders or use Yipeng's dataloaders 
 
@@ -44,8 +45,19 @@ class MR_US_dataset(Dataset):
         # Add dimesion for "channel"
         mr_data = self.mri_data[idx].unsqueeze(0)
         mr_label = self.mri_labels[idx].unsqueeze(0)
+        mr_label = mr_label[:,:,:,:,0]       # use only prostate label
         
-        return mr_data, upsample_us.squeeze().unsqueeze(0), mr_label, upsample_us_labels.squeeze()
+        # Squeeze dimensions 
+        us = upsample_us.squeeze().unsqueeze(0)
+        us_label = upsample_us_labels.squeeze().unsqueeze(0)
+        
+        # normalise data 
+        mr = self.normalise_data(mr_data)
+        us = self.normalise_data(us)
+        mr_label = self.normalise_data(mr_label)
+        us_label = self.normalise_data(us_label)
+        
+        return mr, us, mr_label, us_label
     
     def resample(self, img, dims = (120,128,128), label = False):
         upsample_method = torch.nn.Upsample(size = dims)
@@ -57,7 +69,23 @@ class MR_US_dataset(Dataset):
             upsampled_img = upsample_method(img.unsqueeze(0).unsqueeze(0))
         
         return upsampled_img
-  
+    
+    def normalise_data(self, img):
+        """
+        Normalises labels and images 
+        """
+        
+        min_val = torch.min(img)
+        max_val = torch.max(img)
+        
+        if max_val == 0: 
+            print(f"Empty mask, not normalised img")
+            norm_img = img # return as 0s only if blank image or volume 
+        else: 
+            norm_img = (img - min_val) / (max_val - min_val)
+        
+        return norm_img 
+    
 if __name__ == '__main__':
     
     data_folder = '/Users/ianijirahmae/Documents/DATASETS/mri_us_paired'
