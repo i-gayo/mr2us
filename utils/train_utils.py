@@ -155,9 +155,11 @@ class Pix2pixTrainer():
         self.device = device 
         self.log_dir = log_dir 
         os.makedirs(log_dir, exist_ok=True)
+        results_dir = os.path.join(self.log_dir, 'runs_pix2pix')
+        os.makedirs(results_dir, exist_ok=True)
         
         # Initialise sumnary writer and model paths 
-        self.writer = SummaryWriter(self.log_dir) 
+        self.writer = SummaryWriter(results_dir) 
         self.gen_model_path = os.path.join(self.log_dir, 'gen_model.pth')
         self.dis_model_path = os.path.join(self.log_dir, 'dis_model.pth')
                 
@@ -338,7 +340,8 @@ class LocalNetTrainer():
         self.best_metric = 0 
         
         # Initialise sumnary writer and model paths 
-        self.results_dir = os.makedirs(os.path.join(self.log_dir, 'runs'), exist_ok = True)
+        self.results_dir = os.path.join(self.log_dir, 'runs_regnet')
+        os.makedirs(self.results_dir, exist_ok = True)
         self.writer = SummaryWriter(self.results_dir) 
 
     def train(self, num_epochs = 1000, save_freq = 10):
@@ -394,12 +397,11 @@ class LocalNetTrainer():
                 torch.save(self.model.state_dict(), check_path)
             
             # Save mean l2, loss and dice to each value 
-            self.writer.add_scalar('train/reg_loss', torch.mean(epoch_loss), epoch)
-            self.writer.add_scalar('train/l2_loss', torch.mean(epoch_l2), epoch)
-            self.writer.add_scalar('train/dice_loss', torch.mean(epoch_dice), epoch)    
+            self.writer.add_scalar('train/reg_loss', torch.mean(torch.tensor(epoch_loss)), epoch)
+            self.writer.add_scalar('train/l2_loss', torch.mean(torch.tensor(epoch_l2)), epoch)
+            self.writer.add_scalar('train/dice_loss', torch.mean(torch.tensor(epoch_dice)), epoch)    
                     
-            print('-'*10, 'validation', '-'*10)
-            self.validate(dataloader=self.val_loader, epoch=epoch)
+            self.validate(self.val_loader, epoch=epoch)
 
     def get_warped_images(self, move_label, ddf):
 
@@ -436,21 +438,25 @@ class LocalNetTrainer():
         
         res_label = [] # for computing dice loss
         res_img = [] # for computing global mutual information 
+        print('-'*10, 'Validating', '-'*10)
         
         with torch.no_grad():
             
             for idx, (mr, us, mr_labels, us_labels) in enumerate(val_loader):
+                
+                # move all to device
+                mr, us, mr_labels, us_labels = mr.to(self.device), us.to(self.device), mr_labels.to(self.device), us_labels.to(self.device)
                 
                 mr_us = torch.cat([mr, us], dim=1)
                 ddfs = self.model.forward(mr_us)
                 ddf_img = ddfs[1]
                 
                 # Warp labels 
-                wp_label = self.get_warpped_images(us_labels, ddf_img)
+                wp_label = self.get_warped_images(us_labels, ddf_img)
                 fx_label = mr_labels
                 
                 # Warp images
-                wp_img = self.get_warpped_images(us, ddf_img)
+                wp_img = self.get_warped_images(us, ddf_img)
                 fx_img = mr 
                 
                 # Warp both images and labels and comptue dice for labels, and MI for imgs 
@@ -473,6 +479,7 @@ class LocalNetTrainer():
             self.writer.add_scalar('val/img_loss', mean_img, epoch)
             self.writer.add_scalar('val/label_loss', mean_label, epoch)
             
+            print(f"Epoch {epoch} image loss : {mean_img}±{std_img} label loss {mean_label}±{std_label}")
             if mean_label > self.best_metric:
                 
                 print(f"Saving new best model, new best loss : {self.best_metric}")
