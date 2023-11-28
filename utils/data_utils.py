@@ -39,8 +39,16 @@ class MR_US_dataset(Dataset):
         
     def __getitem__(self, idx):
         
-        upsample_us = self.resample(self.us_data[idx])
-        upsample_us_labels = self.resample(self.us_labels[idx], label = True)
+        #upsample_us = self.resample(self.us_data[idx])
+        #upsample_us_labels = self.resample(self.us_labels[idx], label = True)
+        
+        # Change view of us image to match mr first 
+        t_us = torch.transpose(self.us_data[idx], 2,0)
+        t_us_labels = torch.transpose(self.us_labels[idx], 2,0)
+        
+        # Upsample to MR images 
+        upsample_us = self.resample(t_us)
+        upsample_us_labels = self.resample(t_us_labels, label = True)
         
         # Add dimesion for "channel"
         mr_data = self.mri_data[idx].unsqueeze(0)
