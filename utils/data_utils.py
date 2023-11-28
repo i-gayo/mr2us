@@ -4,10 +4,6 @@ from nibabel.processing import resample_to_output
 import os
 from torch.utils.data import DataLoader, Dataset
 import torch 
-import matplotlib
-matplotlib.use('TkAgg')
-from matplotlib import pyplot as plt
-# TODO : Implement dataloaders or use Yipeng's dataloaders 
 
 class MR_US_dataset(Dataset):
     """
