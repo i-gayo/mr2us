@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 import models.layers as layers # import model layers from Qianye's code 
+import math 
 
 ######### simple transformnet based on unet architecture ########
 class TransformNet(nn.Module):
@@ -394,7 +395,177 @@ class LocalNet(nn.Module):
         
         return f_bottleneck, ddf
 
+#### Diffusion models 
 
+class BetaSchedulers():
+    """
+    A class of beta schedulers for use in diffusion process 
+    """
+    def __init__(self, scheduler_type = 'linear'):
+        """
+        Define which scheduler to use
+        """
+        self.scheduler_type == scheduler_type
+    
+    def get_schedule(self, timesteps):
+        
+        if self.scheduler_type == 'linear':
+            return self.linear_beta_schedule(timesteps)
+        elif self.scheduler_type == 'cosine':
+            return self.cosine_beta_schedule(timesteps)
+        elif self.scheduler_type == 'quadratic':
+            return self.quadratic_beta_schedule(timesteps)
+        elif self.scheduler_type == 'sigmoid':
+            return self.sigmoid_beta_schedule(timesteps)
+        else: 
+            raise NotImplementedError("Scheduler type not recognised, please enter valid type")
+
+    def cosine_beta_schedule(timesteps, s=0.008):
+        """
+        Generate a cosine learning rate schedule as proposed in the paper:
+        "Positional Embeddings improve Transformer-based Monaural Speech Separation"
+        (https://arxiv.org/abs/2102.09672)
+
+        Args:
+        - timesteps (int): Number of timesteps or steps in the schedule.
+        - s (float, optional): Scaling factor for the cosine schedule. Defaults to 0.008.
+
+        Returns:
+        - torch.Tensor: Beta values representing the schedule.
+        """
+        steps = timesteps + 1
+        x = torch.linspace(0, timesteps, steps)
+        alphas_cumprod = torch.cos(((x / timesteps) + s) / (1 + s) * torch.pi * 0.5) ** 2
+        alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
+        betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
+        return torch.clamp(betas, 0.0001, 0.9999)
+
+    def linear_beta_schedule(timesteps):
+        """
+        Generate a linear learning rate schedule.
+
+        Args:
+        - timesteps (int): Number of timesteps or steps in the schedule.
+
+        Returns:
+        - torch.Tensor: Beta values representing the schedule.
+        """
+        beta_start = 0.0001
+        beta_end = 0.02
+        return torch.linspace(beta_start, beta_end, timesteps)
+
+    def quadratic_beta_schedule(timesteps):
+        """
+        Generate a quadratic learning rate schedule.
+
+        Args:
+        - timesteps (int): Number of timesteps or steps in the schedule.
+
+        Returns:
+        - torch.Tensor: Beta values representing the schedule.
+        """
+        beta_start = 0.0001
+        beta_end = 0.02
+        return torch.linspace(beta_start**0.5, beta_end**0.5, timesteps) ** 2
+
+    def sigmoid_beta_schedule(timesteps):
+        """
+        Generate a sigmoidal learning rate schedule.
+
+        Args:
+        - timesteps (int): Number of timesteps or steps in the schedule.
+
+        Returns:
+        - torch.Tensor: Beta values representing the schedule.
+        """
+        beta_start = 0.0001
+        beta_end = 0.02
+        betas = torch.linspace(-6, 6, timesteps)
+        return torch.sigmoid(betas) * (beta_end - beta_start) + beta_start
+
+class Diffusion(nn.Module):
+    """
+    Methods to apply diffusion noise to images for the forward diffusion process 
+    """
+
+    def __init__(self, scheduler_type = 'linear'):
+        """
+        """
+
+        self.scheduler = BetaSchedulers(scheduler_type)
+        
+    
+    def compute_alphabetas(self, timesteps):
+        """
+        Compute alphas for diffusion modelling 
+        """
+        
+        betas = self.scheduler.get_schedule(timesteps)
+        alphas = 1 - betas 
+        
+        self.alphas = alphas
+        self.betas = betas 
+        
+        return alphas, betas 
+    
+    def compute_alphabar(alphas):
+        alpha_cumprod = torch.cumprod(alphas, axis = 0)
+        alpha_prev = F.pad(alpha_cumprod[:-1], (1, 0), value=1.0)
+        
+        
+    def q_sample(self, x_o, t, noise = None):
+        """
+        Function that applies forward diffusion process
+        """
+        
+        
+        
+        
+    
+class DiffUNet(nn.Module):
+    """
+    A conditional UNEt, conditioned on both time steps 
+    and MR images for diffusion generation!!!
+    
+    Note : 
+    -----------
+    Differences from normal unet include:
+    - Attention module
+    - Residual block 
+    - Conditional concatenation from timestep / noise level t
+    """
+    
+    def __init__(self):
+        """
+        Define internal layers
+        
+        1. Convolutional layer applied on noisy images; position embeddings computed
+        2. Down-samplign stages 
+            - (2 ResNet blocks + group norm + attention + residual connection + downsample operation)
+        3. ResNet blocks applied, interleaved with attention
+        4. Upsampling stages:
+            - 2 ResNet blocks; group norm ; attention ; residual connection ; upsapmle operation
+        5. ResNet, followed by convolution
+        """
+        pass 
+    
+    def sinusoidal_embedding(self, timesteps, dim):
+        """
+        Create sinusidal embeddings for each time step 
+        """
+        half_dim = dim // 2
+        
+        # Based on experssion 
+        exponent = -math.log(10000) * torch.arange(
+            start=0, end=half_dim, dtype=torch.float32)
+        exponent = exponent / (half_dim - 1.0)
+
+        embed = torch.exp(exponent).to(device=timesteps.device)
+        embed = timesteps[:, None].float() * embed[None, :]
+
+        return embed 
+    
+    
 if __name__ == '__main__':
     
     from ..utils.data_utils import * 
