@@ -488,36 +488,74 @@ class Diffusion(nn.Module):
     Methods to apply diffusion noise to images for the forward diffusion process 
     """
 
-    def __init__(self, scheduler_type = 'linear'):
+    def __init__(self, scheduler_type = 'linear', timesteps = 300):
         """
         """
 
         self.scheduler = BetaSchedulers(scheduler_type)
+        self.alpha, self.beta, self.alpha_bar = self.compute_alphabetas(timesteps)
         
     
     def compute_alphabetas(self, timesteps):
         """
         Compute alphas for diffusion modelling 
+        
+        Note : Alpa and beta are known 
         """
         
         betas = self.scheduler.get_schedule(timesteps)
         alphas = 1 - betas 
         
-        self.alphas = alphas
-        self.betas = betas 
         
-        return alphas, betas 
-    
-    def compute_alphabar(alphas):
-        alpha_cumprod = torch.cumprod(alphas, axis = 0)
-        alpha_prev = F.pad(alpha_cumprod[:-1], (1, 0), value=1.0)
+        alphas = alphas
+        betas = betas 
+        alpha_bar = torch.cumprod(alphas, axis = 0) # alpha bar which is used for q(x_t | x_o)
         
+        return alphas, betas, alpha_bar
         
     def q_sample(self, x_o, t, noise = None):
         """
-        Function that applies forward diffusion process
+        Function that applies forward diffusion process to sample a noisy image 
+        at noise level t, given x_o 
+        
+        Equation : 
+        q(x_t | x_o) = normal(x_t ; mean = sqrt(alpha_bar_t)x_o, variance = (a-alpha_bar_t)I)
+        
+        Returns x_t based on q(x_t) equation 
         """
         
+        if noise is None: 
+            # no noise given as input 
+            noise = torch.randn_like(x_o)
+            
+            
+        mean_val_t = self.extract_t(torch.sqrt(self.alpha_bar), t, x_o.shape()) 
+        var_t = self.extract_t(torch.sqrt(1 - self.alpha_bar), t, x_o.shape())
+        
+        # q(x_t | x_o) = Normal distribution (x_t ; sqrt(alpha_bar_t)*x_o, (1 - alpha_bar_t)I)
+        x_t = mean_val_t * x_o + var_t*noise 
+        
+        return x_t 
+            
+    def extract_t(self, a, t, x_shape):
+        """
+        Extract t values for given alpha 
+        """
+        batch_size = t.shape[0]
+        
+        # Obtain t values 
+        out = a.gather(-1, t.cpu())
+        
+        return out.reshape(batch_size, *((1,) * (len(x_shape) - 1))).to(t.device)
+
+        
+    def get_noisy_img(self, x_o, t):
+        
+        # obtain noise
+        x_t = self.q_sample(x_o, t = t)
+        
+        return x_t 
+    
         
         
         
@@ -570,6 +608,7 @@ if __name__ == '__main__':
     
     from ..utils.data_utils import * 
     
+
     BATCH_SIZE = 2
     if torch.cuda.is_available():
         device = torch.device("cuda")
@@ -584,6 +623,12 @@ if __name__ == '__main__':
     val_dataset = MR_US_dataset(data_folder, mode = 'val')
     val_dataloader = DataLoader(val_dataset, batch_size = 1)
     
+    # Testing fissuion process 
+    mr, us, mr_label, us_label = train_dataset[0]
+    
+    # Test diffusion
+    DiffProcess = Diffusion('linear', timesteps = 300)
+    DiffProcess.get_noisy_img(mr, t = torch.tensor([40]))
     
     # Define models for training 
     regnet = LocalNet([120,120,20], device = device)
