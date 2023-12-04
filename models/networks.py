@@ -7,6 +7,7 @@ from torch.utils.tensorboard import SummaryWriter
 import models.layers as layers # import model layers from Qianye's code 
 import math 
 
+
 ######### simple transformnet based on unet architecture ########
 class TransformNet(nn.Module):
     """
@@ -405,7 +406,7 @@ class BetaSchedulers():
         """
         Define which scheduler to use
         """
-        self.scheduler_type == scheduler_type
+        self.scheduler_type = scheduler_type
     
     def get_schedule(self, timesteps):
         
@@ -420,7 +421,7 @@ class BetaSchedulers():
         else: 
             raise NotImplementedError("Scheduler type not recognised, please enter valid type")
 
-    def cosine_beta_schedule(timesteps, s=0.008):
+    def cosine_beta_schedule(self, timesteps, s=0.008):
         """
         Generate a cosine learning rate schedule as proposed in the paper:
         "Positional Embeddings improve Transformer-based Monaural Speech Separation"
@@ -440,7 +441,7 @@ class BetaSchedulers():
         betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
         return torch.clamp(betas, 0.0001, 0.9999)
 
-    def linear_beta_schedule(timesteps):
+    def linear_beta_schedule(self, timesteps):
         """
         Generate a linear learning rate schedule.
 
@@ -454,7 +455,7 @@ class BetaSchedulers():
         beta_end = 0.02
         return torch.linspace(beta_start, beta_end, timesteps)
 
-    def quadratic_beta_schedule(timesteps):
+    def quadratic_beta_schedule(self, timesteps):
         """
         Generate a quadratic learning rate schedule.
 
@@ -468,7 +469,7 @@ class BetaSchedulers():
         beta_end = 0.02
         return torch.linspace(beta_start**0.5, beta_end**0.5, timesteps) ** 2
 
-    def sigmoid_beta_schedule(timesteps):
+    def sigmoid_beta_schedule(self, timesteps):
         """
         Generate a sigmoidal learning rate schedule.
 
@@ -529,8 +530,8 @@ class Diffusion(nn.Module):
             noise = torch.randn_like(x_o)
             
             
-        mean_val_t = self.extract_t(torch.sqrt(self.alpha_bar), t, x_o.shape()) 
-        var_t = self.extract_t(torch.sqrt(1 - self.alpha_bar), t, x_o.shape())
+        mean_val_t = self.extract_t(torch.sqrt(self.alpha_bar), t, x_o.size()) 
+        var_t = self.extract_t(torch.sqrt(1 - self.alpha_bar), t, x_o.size())
         
         # q(x_t | x_o) = Normal distribution (x_t ; sqrt(alpha_bar_t)*x_o, (1 - alpha_bar_t)I)
         x_t = mean_val_t * x_o + var_t*noise 
@@ -555,11 +556,7 @@ class Diffusion(nn.Module):
         x_t = self.q_sample(x_o, t = t)
         
         return x_t 
-    
-        
-        
-        
-    
+         
 class DiffUNet(nn.Module):
     """
     A conditional UNEt, conditioned on both time steps 
@@ -606,7 +603,7 @@ class DiffUNet(nn.Module):
     
 if __name__ == '__main__':
     
-    from ..utils.data_utils import * 
+    #from ..utils.data_utils import * 
     
 
     BATCH_SIZE = 2
