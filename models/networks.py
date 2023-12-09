@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 import models.layers as layers # import model layers from Qianye's code 
 import math 
+from einops_exts import check_shape, rearrange_many
 
 
 ######### simple transformnet based on unet architecture ########
@@ -585,18 +586,22 @@ class CnnBlock(nn.Module):
     def __init__(self, input_ch, output_ch, groups=8):
         super().__init__()
         self.conv = nn.Conv3d(in_channels = input_ch, out_channels = output_ch, kernel_size = 3, padding = 1, bias = False)
-        self.norm = nn.GroupNorm(output_ch, groups)
+        self.norm = nn.GroupNorm(groups, output_ch)
         self.act = nn.SiLU()
                 
-    def forward(self, x, scale_shift=None):
+    def forward(self, x, t=None):
         x = self.conv(x)
         x = self.norm(x)
 
-        if exists(scale_shift):
-            scale, shift = scale_shift
-            x = x * (scale + 1) + shift
+        # if exists(scale_shift):
+        #     scale, shift = scale_shift
+        #     x = x * (scale + 1) + shift
 
+        if exists(t):
+            x += t # Add time embeddings to image 
+            
         x = self.act(x)
+        
         return x
     
 class ResidualBlock(nn.Module):
@@ -638,10 +643,10 @@ class ResidualBlock(nn.Module):
         scale_shift = None
         if exists(self.time_emb_layers) and exists(time_emb):
             time_emb = self.time_emb_layers(time_emb)
-            time_emb = rearrange(time_emb, 'b c -> b c 1 1')
-            scale_shift = time_emb.chunk(2, dim = 1)
+            time_emb = rearrange(time_emb, 'b c -> b c 1 1 1') # b x c x 1 x 1 ; img size is b x c x h x w
+            #scale_shift = time_emb.chunk(2, dim = 1)
 
-        out = self.conv_block1(x, scale_shift)
+        out = self.conv_block1(x, time_emb)
         out = self.conv_block2(out)
         
         return out + res_out
@@ -674,26 +679,52 @@ class Attention3D(nn.Module):
         self.to_out = nn.Conv3d(hidden_dim, dim, kernel_size=1)
 
     def forward(self, x):
-        b, c, d, h, w = x.shape
+        b, c, h, w, d = x.shape  # Add depth dimension (d)
+        
         qkv = self.to_qkv(x).chunk(3, dim=1)
         q, k, v = map(
-            lambda t: rearrange(t, "b (h c) d h w -> b h c d h w", h=self.heads),
-            qkv
-        )
+            lambda t: rearrange(t, 'b (h c) d x y -> b h c d (x y)', h=self.heads),
+            qkv)
+
         q = q * self.scale
 
-        # q * k 
-        sim = einsum("b h d i j, b h d i k -> b h i j k", q, k)
-        sim = sim - sim.amax(dim=(-1, -2, -3), keepdim=True).detach()
-        
-        # softmax(q*k)
-        attn = F.softmax(sim, dim=(-1, -2, -3))
-        
-        # softmax(q*k) * v
-        out = einsum("b h i j k, b h d k -> b h i d j", attn, v)
-        out = rearrange(out, "b h c d h w -> b (h c) d h w")
+        sim = einsum('b h d i n, b h d j n -> b h d i j', q, k)
+        sim = sim - sim.amax(dim=-1, keepdim=True).detach()
+        attn = sim.softmax(dim=-1)
+
+        out = einsum('b h d i j, b h d j -> b h d i', attn, v)
+        out = rearrange(out, 'b h d (x y) i -> b (h d) x y i', x=h, y=w)
         return self.to_out(out)
-    
+
+class SpatialLinearAttention(nn.Module):
+    def __init__(self, dim, heads=4, dim_head=32):
+        super().__init__()
+        self.scale = dim_head ** -0.5
+        self.heads = heads
+        hidden_dim = dim_head * heads
+        self.to_qkv = nn.Conv2d(dim, hidden_dim * 3, 1, bias=False)
+        self.to_out = nn.Conv2d(hidden_dim, dim, 1)
+
+    def forward(self, x):
+        b, c, f, h, w = x.shape
+        x = rearrange(x, 'b c f h w -> (b f) c h w')
+
+        qkv = self.to_qkv(x).chunk(3, dim=1)
+        q, k, v = rearrange_many(
+            qkv, 'b (h c) x y -> b h c (x y)', h=self.heads)
+
+        q = q.softmax(dim=-2)
+        k = k.softmax(dim=-1)
+
+        q = q * self.scale
+        context = einsum('b h d n, b h e n -> b h d e', k, v)
+
+        out = einsum('b h d e, b h d n -> b h e n', context, q)
+        out = rearrange(out, 'b h c (x y) -> b (h c) x y',
+                        h=self.heads, x=h, y=w)
+        out = self.to_out(out)
+        return rearrange(out, '(b f) c h w -> b c f h w', b=b)
+
 class LinearAttention3D(nn.Module):
     """
     Computes multi-head linear attention for 3D volumes. 
@@ -728,7 +759,7 @@ class LinearAttention3D(nn.Module):
         q = q * self.scale
         
         # Obtain context = k*v 
-        context = torch.einsum("b h d e n, b h d e m -> b h d n m", k, v)
+        context = einsum("b h d e n, b h d e m -> b h d n m", k, v)
 
         # obtains k*v*q vectors 
         out = torch.einsum("b h d n m, b h d e n -> b h e n m", context, q)
@@ -820,6 +851,7 @@ class DiffUNet(nn.Module):
         # Compute hidden filter sizes
         self.layer_size = [feature_size * (2*i) for i in dim_mults]
     
+        init_dim = self.layer_size[0]
         # Compute conv layer for noisy images (conditioned)
         self.first_conv = nn.Conv3d(input_channels, init_dim,1, padding = 0)
                 
@@ -837,14 +869,20 @@ class DiffUNet(nn.Module):
         self.ds_layers = nn.ModuleList()
         self.us_layers = nn.ModuleList()
     
-        in_dim = self.init_ch
-        for idx, layer_size in enumerate(self.layer_size[0:]):
+        in_dim = self.layer_size[0]
+        for idx, layer_size in enumerate(self.layer_size[1:]):
+            
+            print(f"idx : {idx}")
+            is_last = (idx > (len(self.layer_size) - 1))
+            
+            print(f"In dim {in_dim} layer size {layer_size}")
             self.ds_layers.append(
                 nn.ModuleList(
-                    [ResidualBlock(in_dim, layer_size, embed_dim),
-                    ResidualBlock(layer_size, layer_size, embed_dim), 
-                    Residual(PreNorm(layer_size, LinearAttention3D(layer_size))),
-                    self.downsample_3d(layer_size, layer_size)] # downsample to next layer 
+                    [ResidualBlock(in_dim, in_dim, embed_dim),
+                    ResidualBlock(in_dim, in_dim, embed_dim), 
+                    Residual(PreNorm(in_dim, SpatialLinearAttention(in_dim, heads = 4))),
+                    self.downsample_3d(in_dim, layer_size) if not is_last 
+                    else nn.Conv3d(layer_size, layer_size, 3, padding=1)] # downsample to next layer from 
                 )
             )
             in_dim = layer_size # change to next layer size 
@@ -852,17 +890,20 @@ class DiffUNet(nn.Module):
         # Bottleneck ResNet blocks applied, interleaved with attention
         mid_layer_size = self.layer_size[-1]
         self.bottleneck_1 = ResidualBlock(mid_layer_size, mid_layer_size, embed_dim)
-        self.bottleneck_attn = Residual(PreNorm(mid_layer_size, LinearAttention3D(mid_layer_size)))
+        self.bottleneck_attn = Residual(PreNorm(mid_layer_size, SpatialLinearAttention(mid_layer_size, 4)))
         self.bottleneck_2 = ResidualBlock(mid_layer_size, mid_layer_size, embed_dim)
         
         # Upsample blocks 2 ResNet blocks; group norm ; attention ; residual connection ; upsapmle operation
         in_dim = mid_layer_size 
-        for idx, layer_size in enumerate(list(reversed(self.layer_size[:-2]))):
+        print(f"UPSAMPLE")
+        for idx, layer_size in enumerate(list(reversed(self.layer_size[:-1]))):
+            print(f"idx : {idx}")            
+            print(f"In dim {in_dim} layer size {layer_size}")
             self.us_layers.append(
                 nn.ModuleList(
                     [ResidualBlock(in_dim,  layer_size, embed_dim), 
                     ResidualBlock(in_dim,  layer_size, embed_dim), 
-                    Residual(PreNorm(in_dim,LinearAttention3D(in_dim))),
+                    Residual(PreNorm(layer_size,SpatialLinearAttention(layer_size, 4))),
                     self.upsample_3d(in_dim, layer_size)    ]
                 )
             )
@@ -887,29 +928,42 @@ class DiffUNet(nn.Module):
 
         h = []
 
+        counter = 0 
         for block1, block2, attn, downsample in self.ds_layers:
+            #print(f"ds_layers")
+            print(f"Block :{counter}")
+            print(f"Size of x {x.size()}")
             x = block1(x, t)
             h.append(x) # Append h 
 
             x = block2(x, t)
             x = attn(x)
             h.append(x)
-
+            print(f"h dimensions : {h[-1].size()}")
+            
+            #print(f"Before downsample dimensions : {x.size()}")
             x = downsample(x)
+            print(f"After downsample dimensions : {x.size()}")
+            counter+=1 
 
+        print(f"Dimensions after decoder : {x.size()}")
+        
         x = self.bottleneck_1(x, t)
         x = self.bottleneck_attn(x)
         x = self.bottleneck_2(x, t)
-
-        for block1, block2, attn, upsample in self.ups:
+        print(f"Dimensions of bottleneck layers : {x.size()}")
+        
+        for block1, block2, attn, upsample in self.us_layers:
+            x = upsample(x)
             x = torch.cat((x, h.pop()), dim=1)
             x = block1(x, t)
 
             x = torch.cat((x, h.pop()), dim=1)
             x = block2(x, t)
             x = attn(x)
+            print(f"Upsample layers : {x.size()}")
 
-            x = upsample(x)
+            #x = upsample(x)
 
         x = torch.cat((x, r), dim=1)
 
@@ -922,11 +976,10 @@ class DiffUNet(nn.Module):
         """
         Downsamples layers 
         """        
-        
         return nn.Sequential(
             # Adjusting the spatial and channel rearrangement for 3D
-            Rearrange("b c d (h p1) (w p2) -> b (c p1 p2) d h w", p1=2, p2=2),
-            nn.Conv3d(input_ch * 4, output_ch, kernel_size=1),
+            Rearrange("b c (d p0) (h p1) (w p2) -> b (c p0 p1 p2) d h w", p0=2, p1=2, p2=2),
+            nn.Conv3d(input_ch * 8, output_ch, kernel_size=1)
         )
 
     def upsample_3d(self, input_ch, output_ch):
@@ -973,8 +1026,6 @@ class DiffUNet(nn.Module):
 
         return embeddings
     
-
-
 
 if __name__ == '__main__':
     
