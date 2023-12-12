@@ -13,7 +13,7 @@ class MR_US_dataset(Dataset):
     US
     US_label 
     """
-    def __init__(self, dir_name, mode = 'train'):
+    def __init__(self, dir_name, mode = 'train', alligned = False):
         self.dir_name = dir_name 
         self.mode = mode 
         
@@ -23,6 +23,7 @@ class MR_US_dataset(Dataset):
         self.mri_names = os.listdir(os.path.join(dir_name, mode, 'mr_images'))
         self.mri_label_names = os.listdir(os.path.join(dir_name, mode, 'mr_labels'))
         self.num_data = len(self.us_names)
+        self.alligned = alligned
         
         # Load items 
         self.us_data = [torch.tensor(nib.load(os.path.join(dir_name, mode, 'us_images', self.us_names [i])).get_fdata().squeeze()) for i in range(self.num_data)]
@@ -39,9 +40,14 @@ class MR_US_dataset(Dataset):
         #upsample_us_labels = self.resample(self.us_labels[idx], label = True)
         
         # Change view of us image to match mr first 
-        t_us = torch.transpose(self.us_data[idx], 2,0)
-        t_us_labels = torch.transpose(self.us_labels[idx], 2,0)
-        
+        if self.alligned:
+            # no need to transpose if alligned alerady
+            t_us = self.us_data[idx]
+            t_us_labels = self.us_labels[idx]
+        else:
+            t_us = torch.transpose(self.us_data[idx], 2,0)
+            t_us_labels = torch.transpose(self.us_labels[idx], 2,0)
+            
         # Upsample to MR images 
         upsample_us = self.resample(t_us)
         upsample_us_labels = self.resample(t_us_labels, label = True)
@@ -49,7 +55,9 @@ class MR_US_dataset(Dataset):
         # Add dimesion for "channel"
         mr_data = self.mri_data[idx].unsqueeze(0)
         mr_label = self.mri_labels[idx].unsqueeze(0)
-        mr_label = mr_label[:,:,:,:,0]       # use only prostate label
+        
+        if len(mr_label.size()) > 4:
+            mr_label = mr_label[:,:,:,:,0]       # use only prostate label
         
         # Squeeze dimensions 
         us = upsample_us.squeeze().unsqueeze(0)
@@ -67,7 +75,11 @@ class MR_US_dataset(Dataset):
         upsample_method = torch.nn.Upsample(size = dims)
         if label: 
             # Choose only prostate gland label 
-            img_label = img[:,:,:,0]
+            if len(img.size()) > 3:
+                img_label = img[:,:,:,0]
+            else:
+                img_label = img 
+                
             upsampled_img = upsample_method(img_label.unsqueeze(0).unsqueeze(0))
         else:
             upsampled_img = upsample_method(img.unsqueeze(0).unsqueeze(0))
