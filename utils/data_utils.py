@@ -13,7 +13,7 @@ class MR_US_dataset(Dataset):
     US
     US_label 
     """
-    def __init__(self, dir_name, mode = 'train', downsample = False):
+    def __init__(self, dir_name, mode = 'train', downsample = False, alligned = False):
         self.dir_name = dir_name 
         self.mode = mode 
         
@@ -24,6 +24,7 @@ class MR_US_dataset(Dataset):
         self.mri_label_names = os.listdir(os.path.join(dir_name, mode, 'mr_labels'))
         self.num_data = len(self.us_names)
         self.downsample = downsample
+        self.alligned = alligned
         
         # Load items 
         self.us_data = [torch.tensor(nib.load(os.path.join(dir_name, mode, 'us_images', self.us_names [i])).get_fdata().squeeze()) for i in range(self.num_data)]
@@ -39,12 +40,11 @@ class MR_US_dataset(Dataset):
         #upsample_us = self.resample(self.us_data[idx])
         #upsample_us_labels = self.resample(self.us_labels[idx], label = True)
         
-        # Change view of us image to match mr first 
         if self.alligned:
             # no need to transpose if alligned alerady
             t_us = self.us_data[idx]
             t_us_labels = self.us_labels[idx]
-        else:
+        else: # Change view of us image to match mr first 
             t_us = torch.transpose(self.us_data[idx], 2,0)
             t_us_labels = torch.transpose(self.us_labels[idx], 2,0)
             
