@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 import models.layers as layers # import model layers from Qianye's code 
 import math 
+from einops_exts import check_shape, rearrange_many
 
 
 ######### simple transformnet based on unet architecture ########
@@ -397,7 +398,12 @@ class LocalNet(nn.Module):
         return f_bottleneck, ddf
 
 #### Diffusion models 
+from einops import rearrange, reduce
+from einops.layers.torch import Rearrange
+from torch import nn, einsum
 
+
+## Diffusion functions 
 class BetaSchedulers():
     """
     A class of beta schedulers for use in diffusion process 
@@ -556,56 +562,475 @@ class Diffusion(nn.Module):
         x_t = self.q_sample(x_o, t = t)
         
         return x_t 
-         
+
+## DiffUNet building blocks 
+
+def exists(x):
+    return x is not None
+
+class Residual(nn.Module):
+    """"
+    Computes residual connections between input and another layer 
+    """
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+
+    def forward(self, x, *args, **kwargs):
+        return self.fn(x, *args, **kwargs) + x
+
+class CnnBlock(nn.Module):
+    """
+    A CNN block with time embeddings!!! 
+    """
+    def __init__(self, input_ch, output_ch, groups=8):
+        super().__init__()
+        self.conv = nn.Conv3d(in_channels = input_ch, out_channels = output_ch, kernel_size = 3, padding = 1, bias = False)
+        self.norm = nn.GroupNorm(groups, output_ch)
+        self.act = nn.SiLU()
+                
+    def forward(self, x, t=None):
+        x = self.conv(x)
+        x = self.norm(x)
+
+        # if exists(scale_shift):
+        #     scale, shift = scale_shift
+        #     x = x * (scale + 1) + shift
+
+        if exists(t):
+            x += t # Add time embeddings to image 
+            
+        x = self.act(x)
+        
+        return x
+    
+class ResidualBlock(nn.Module):
+    """
+    Computes residual blocks for each UNet layer
+    For each block : conv + groupnorm + silu activation layer 
+    Time embed added before second convolution 
+    """
+    def __init__(self, input_ch, output_ch, time_emb_dim=None, groups = 8):
+        """
+        Residual layers 
+        """
+        super().__init__()
+        self.input_ch = input_ch 
+        self.output_ch = output_ch 
+        self.num_groups = groups 
+        
+        # Time embeddings 
+        self.time_emb_layers = (
+            nn.Sequential(nn.SiLU(), nn.Linear(time_emb_dim,output_ch))
+            if exists(time_emb_dim)
+            else None)
+        
+        # Residual convolution
+        self.residual_conv = nn.Conv3d(
+            input_ch, out_channels=output_ch,
+            kernel_size=1) if input_ch != output_ch else nn.Identity()
+
+        self.conv_block1 = CnnBlock(input_ch, output_ch, groups = groups)
+        self.conv_block2 = CnnBlock(output_ch, output_ch, groups = groups) 
+    
+    def forward(self, x, time_emb = None):
+        """
+        Forward pass for each block
+        """
+        
+        res_out = self.residual_conv(x)
+        
+        scale_shift = None
+        if exists(self.time_emb_layers) and exists(time_emb):
+            time_emb = self.time_emb_layers(time_emb)
+            time_emb = rearrange(time_emb, 'b c -> b c 1 1 1') # b x c x 1 x 1 ; img size is b x c x h x w
+            #scale_shift = time_emb.chunk(2, dim = 1)
+
+        out = self.conv_block1(x, time_emb)
+        out = self.conv_block2(out)
+        
+        return out + res_out
+
+
+        
+        
+    def _create_block(self, block_type = 'first'):
+        
+        input_num = self.input_ch
+        if block_type == 'first':
+            input_num = self.input_ch
+        else:
+            input_num = self.output_ch 
+            
+        block = nn.Sequential(
+        nn.Conv3d(in_channels = input_num, out_channels = self.output_ch, kernel_size = 3, padding = 1, bias = False), 
+        nn.GroupNorm(num_channels = self.output_ch, num_groups = self.num_groups),
+        nn.SiLU())
+        
+        return block 
+          
+class Attention3D(nn.Module):
+    def __init__(self, dim, heads=4, dim_head=32):
+        super().__init__()
+        self.scale = dim_head ** -0.5
+        self.heads = heads
+        hidden_dim = dim_head * heads
+        self.to_qkv = nn.Conv3d(dim, hidden_dim * 3, kernel_size=1, bias=False)
+        self.to_out = nn.Conv3d(hidden_dim, dim, kernel_size=1)
+
+    def forward(self, x):
+        b, c, h, w, d = x.shape  # Add depth dimension (d)
+        
+        qkv = self.to_qkv(x).chunk(3, dim=1)
+        q, k, v = map(
+            lambda t: rearrange(t, 'b (h c) d x y -> b h c d (x y)', h=self.heads),
+            qkv)
+
+        q = q * self.scale
+
+        sim = einsum('b h d i n, b h d j n -> b h d i j', q, k)
+        sim = sim - sim.amax(dim=-1, keepdim=True).detach()
+        attn = sim.softmax(dim=-1)
+
+        out = einsum('b h d i j, b h d j -> b h d i', attn, v)
+        out = rearrange(out, 'b h d (x y) i -> b (h d) x y i', x=h, y=w)
+        return self.to_out(out)
+
+class SpatialLinearAttention(nn.Module):
+    def __init__(self, dim, heads=4, dim_head=32):
+        super().__init__()
+        self.scale = dim_head ** -0.5
+        self.heads = heads
+        hidden_dim = dim_head * heads
+        self.to_qkv = nn.Conv2d(dim, hidden_dim * 3, 1, bias=False)
+        self.to_out = nn.Conv2d(hidden_dim, dim, 1)
+
+    def forward(self, x):
+        b, c, f, h, w = x.shape
+        x = rearrange(x, 'b c f h w -> (b f) c h w')
+
+        qkv = self.to_qkv(x).chunk(3, dim=1)
+        q, k, v = rearrange_many(
+            qkv, 'b (h c) x y -> b h c (x y)', h=self.heads)
+
+        q = q.softmax(dim=-2)
+        k = k.softmax(dim=-1)
+
+        q = q * self.scale
+        context = einsum('b h d n, b h e n -> b h d e', k, v)
+
+        out = einsum('b h d e, b h d n -> b h e n', context, q)
+        out = rearrange(out, 'b h c (x y) -> b (h c) x y',
+                        h=self.heads, x=h, y=w)
+        out = self.to_out(out)
+        return rearrange(out, '(b f) c h w -> b c f h w', b=b)
+
+class LinearAttention3D(nn.Module):
+    """
+    Computes multi-head linear attention for 3D volumes. 
+    
+    Uses equation: 
+    
+    z = sofrtmax(Q x K^T / sqrt(dk)) * V 
+    """
+    def __init__(self, dim, heads=4, dim_head=32):
+        super().__init__()
+        self.scale = dim_head**-0.5
+        self.heads = heads
+        hidden_dim = dim_head * heads
+        self.to_qkv = nn.Conv3d(dim, hidden_dim * 3, 1, bias=False)
+
+        self.to_out = nn.Sequential(nn.Conv3d(hidden_dim, dim, 1),
+                                    nn.GroupNorm(1, dim))
+
+    def forward(self, x):
+        b, c, d, h, w = x.shape
+        qkv = self.to_qkv(x).chunk(3, dim=1)
+        
+        # Maps qkv vectors to separate qkv 
+        q, k, v = map(
+            lambda t: rearrange(t, "b (h c) d x y -> b h c d (x y)", h=self.heads), qkv
+        )
+
+        # Obtain soft max values for q and k separately 
+        q = q.softmax(dim=-2)
+        k = k.softmax(dim=-1)
+
+        q = q * self.scale
+        
+        # Obtain context = k*v 
+        context = einsum("b h d e n, b h d e m -> b h d n m", k, v)
+
+        # obtains k*v*q vectors 
+        out = torch.einsum("b h d n m, b h d e n -> b h e n m", context, q)
+        
+        # Re-arrange to number of heads
+        out = rearrange(out, "b h c d (x y) -> b (h c) d x y", h=self.heads, x=d, y=h)
+        
+        return self.to_out(out)
+
+class PreNorm(nn.Module):
+    """
+    Applies group norm before attention layerr 
+    """
+    def __init__(self, dim, fn):
+        super().__init__()
+        self.fn = fn
+        self.norm = nn.GroupNorm(1, dim)
+
+    def forward(self, x):
+        x = self.norm(x)
+        return self.fn(x)
+
+class SinusoidalPositionEmbeddings(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, time):
+        device = time.device
+        half_dim = self.dim // 2
+        embeddings = math.log(10000) / (half_dim - 1)
+        embeddings = torch.exp(torch.arange(half_dim, device=device) * -embeddings)
+        embeddings = time[:, None] * embeddings[None, :]
+        embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
+        return embeddings
+   
+## Diff UNet functions 
+
 class DiffUNet(nn.Module):
     """
     A conditional UNEt, conditioned on both time steps 
     and MR images for diffusion generation!!!
+
     
     Note : 
     -----------
     Differences from normal unet include:
-    - Attention module
-    - Residual block 
+    - Attention module 
+    - Residual blocks 
+    - ResNet blocks 
     - Conditional concatenation from timestep / noise level t
+    
+    Input: Noisy image (us), cond_img (mr) and noise levels 
+    - noisy images (concat) : batch_size x (num_channels*2), height, width, depth)
+    - noise_levels : (batch_size, 1)
+    
+    output: Noise 
+    - batch_size x num_channels, height, width, depth 
     """
     
-    def __init__(self):
+    def __init__(self, 
+                 init_dim, 
+                 output_dim, 
+                 feature_size, 
+                 dim_mults = (1,2,4,8), 
+                 channels = 2,
+                 self_condition = False,
+                 resnet_block_groups = 4):
         """
         Define internal layers
         
         1. Convolutional layer applied on noisy images; position embeddings computed
         2. Down-samplign stages 
-            - (2 ResNet blocks + group norm + attention + residual connection + downsample operation)
+            - (2 ResNet blocks + group norm + attent                                                                                                            ion + residual connection + downsample operation)
         3. ResNet blocks applied, interleaved with attention
         4. Upsampling stages:
             - 2 ResNet blocks; group norm ; attention ; residual connection ; upsapmle operation
         5. ResNet, followed by convolution
         """
-        pass 
+        super().__init__()
+        
+        dim = 1 
+        self.channels = channels 
+        self.self_condition = self_condition 
+        input_channels = channels * (2 if self_condition else 1)
+        self.init_ch = init_dim
+        self.output_ch = output_dim 
+
+        # Compute hidden filter sizes
+        self.layer_size = [feature_size * (2*i) for i in dim_mults]
     
+        init_dim = self.layer_size[0]
+        # Compute conv layer for noisy images (conditioned)
+        self.first_conv = nn.Conv3d(input_channels, init_dim,1, padding = 0)
+                
+        # Compute position embeddings
+        timestep_input_dim = self.layer_size[0] # same size as first layer size 
+        embed_dim = timestep_input_dim * 4
+        
+        self.time_embed_layers = nn.Sequential(
+            SinusoidalPositionEmbeddings(self.layer_size[0]),
+            nn.Linear(timestep_input_dim, embed_dim), 
+            nn.SiLU(), 
+            nn.Linear(embed_dim, embed_dim))            
+    
+        # Downsample layers
+        self.ds_layers = nn.ModuleList()
+        self.us_layers = nn.ModuleList()
+    
+        in_dim = self.layer_size[0]
+        for idx, layer_size in enumerate(self.layer_size[1:]):
+            
+            print(f"idx : {idx}")
+            is_last = (idx > (len(self.layer_size) - 1))
+            
+            print(f"In dim {in_dim} layer size {layer_size}")
+            self.ds_layers.append(
+                nn.ModuleList(
+                    [ResidualBlock(in_dim, in_dim, embed_dim),
+                    ResidualBlock(in_dim, in_dim, embed_dim), 
+                    Residual(PreNorm(in_dim, SpatialLinearAttention(in_dim, heads = 4))),
+                    self.downsample_3d(in_dim, layer_size) if not is_last 
+                    else nn.Conv3d(layer_size, layer_size, 3, padding=1)] # downsample to next layer from 
+                )
+            )
+            in_dim = layer_size # change to next layer size 
+        
+        # Bottleneck ResNet blocks applied, interleaved with attention
+        mid_layer_size = self.layer_size[-1]
+        self.bottleneck_1 = ResidualBlock(mid_layer_size, mid_layer_size, embed_dim)
+        self.bottleneck_attn = Residual(PreNorm(mid_layer_size, SpatialLinearAttention(mid_layer_size, 4)))
+        self.bottleneck_2 = ResidualBlock(mid_layer_size, mid_layer_size, embed_dim)
+        
+        # Upsample blocks 2 ResNet blocks; group norm ; attention ; residual connection ; upsapmle operation
+        in_dim = mid_layer_size 
+        print(f"UPSAMPLE")
+        for idx, layer_size in enumerate(list(reversed(self.layer_size[:-1]))):
+            print(f"idx : {idx}")            
+            print(f"In dim {in_dim} layer size {layer_size}")
+            self.us_layers.append(
+                nn.ModuleList(
+                    [ResidualBlock(in_dim,  layer_size, embed_dim), 
+                    ResidualBlock(in_dim,  layer_size, embed_dim), 
+                    Residual(PreNorm(layer_size,SpatialLinearAttention(layer_size, 4))),
+                    self.upsample_3d(in_dim, layer_size)    ]
+                )
+            )
+            in_dim = layer_size 
+            
+        self.final_res = ResidualBlock(self.layer_size[0]*2, self.layer_size[0], embed_dim)
+        self.final_conv = nn.Conv3d(self.layer_size[0], self.output_ch, kernel_size = 1)
+        
+    def forward(self, x, time):
+        if not torch.is_tensor(time):
+            timesteps = torch.tensor([time],
+                                     dtype=torch.long,
+                                     device=x.device)
+        if self.self_condition:
+            x_self_cond = torch.zeros_like(x)
+            x = torch.cat((x_self_cond, x), dim=1)
+
+        x = self.first_conv(x)
+        r = x.clone() # for residual connections 
+
+        t = self.time_embed_layers(time)
+
+        h = []
+
+        counter = 0 
+        for block1, block2, attn, downsample in self.ds_layers:
+            #print(f"ds_layers")
+            print(f"Block :{counter}")
+            print(f"Size of x {x.size()}")
+            x = block1(x, t)
+            h.append(x) # Append h 
+
+            x = block2(x, t)
+            x = attn(x)
+            h.append(x)
+            print(f"h dimensions : {h[-1].size()}")
+            
+            #print(f"Before downsample dimensions : {x.size()}")
+            x = downsample(x)
+            print(f"After downsample dimensions : {x.size()}")
+            counter+=1 
+
+        print(f"Dimensions after decoder : {x.size()}")
+        
+        x = self.bottleneck_1(x, t)
+        x = self.bottleneck_attn(x)
+        x = self.bottleneck_2(x, t)
+        print(f"Dimensions of bottleneck layers : {x.size()}")
+        
+        for block1, block2, attn, upsample in self.us_layers:
+            x = upsample(x)
+            x = torch.cat((x, h.pop()), dim=1)
+            x = block1(x, t)
+
+            x = torch.cat((x, h.pop()), dim=1)
+            x = block2(x, t)
+            x = attn(x)
+            print(f"Upsample layers : {x.size()}")
+
+            #x = upsample(x)
+
+        x = torch.cat((x, r), dim=1)
+
+        x = self.final_res(x, t)
+        return self.final_conv(x)
+
+
+        
+    def downsample_3d(self, input_ch, output_ch):
+        """
+        Downsamples layers 
+        """        
+        return nn.Sequential(
+            # Adjusting the spatial and channel rearrangement for 3D
+            Rearrange("b c (d p0) (h p1) (w p2) -> b (c p0 p1 p2) d h w", p0=2, p1=2, p2=2),
+            nn.Conv3d(input_ch * 8, output_ch, kernel_size=1)
+        )
+
+    def upsample_3d(self, input_ch, output_ch):
+        return nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="nearest"),
+            nn.Conv3d(input_ch, output_ch, 3, padding=1),
+        )
+        
     def sinusoidal_embedding(self, timesteps, dim):
         """
         Create sinusidal embeddings for each time step 
-        """
-        half_dim = dim // 2
         
-        # Based on experssion 
-        exponent = -math.log(10000) * torch.arange(
-            start=0, end=half_dim, dtype=torch.float32)
-        exponent = exponent / (half_dim - 1.0)
+        Tells us at which timestep the noise is injected 
+        
+        PE(pos, 2i) = sin(pos / 1000^2i / d_model)
+        PE(pos, 2i+1) = cos(pos / 1000^2i/d_model)
 
-        embed = torch.exp(exponent).to(device=timesteps.device)
-        embed = timesteps[:, None].float() * embed[None, :]
+        where pos is position of token (timestep)
+        i is dimension of embedding 
+        d_model : dimensionality of model or embedding        
+        
+        scaling facotr : 10000
+        
+        """
+        
+        # half_dim = dim // 2
+        
+        # # Based on expression : -log(10000) / (half_dim -1)
+        # exponent = -math.log(10000) * torch.arange(
+        #     start=0, end=half_dim, dtype=torch.float32)
+        # exponent = exponent / (half_dim - 1.0)
 
-        return embed 
+        # embed = torch.exp(exponent).to(device=timesteps.device)
+        # embed = timesteps[:, None].float() * embed[None, :]
+        
+        # Re-wriitng in my own words -> pos / 1000^2i / d_model
+        half_dim = dim // 2
+        SCALE_FACTOR = 10000
+        embeddings = math.log(SCALE_FACTOR) / (half_dim - 1)
+        embeddings = torch.exp(torch.arange(half_dim, device=device) * -embeddings) 
+        embeddings = timesteps[:, None] * embeddings[None, :]
+        embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1) # sine and cosine EMBEDDINGS 
+        
+
+        return embeddings
     
-    
+
 if __name__ == '__main__':
     
     #from ..utils.data_utils import * 
     
-
     BATCH_SIZE = 2
     if torch.cuda.is_available():
         device = torch.device("cuda")
