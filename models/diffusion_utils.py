@@ -3,6 +3,8 @@ import os
 import torch.nn as nn 
 import torch 
 import torch.nn.functional as F
+from pathlib import Path
+import tqdm
 
 ## Diffusion functions 
 class BetaSchedulers():
@@ -170,19 +172,22 @@ class Diffusion(nn.Module):
         
         return x_t 
 
-    def p_sample(self, model, x,t, t_index):
+    def p_sample(self, model, x, cond_mr, t, t_index):
         """
         Computes revesre process 
         """
         with torch.no_grad():
-            beta_t = self.extract_t(self.betas, t, t_index)
+            beta_t = self.extract_t(self.beta, t, x.size())
             sqrt_recip_alphas = torch.sqrt(1.0 / self.alpha)
             
             sqrt_1min_alpha_t = self.extract_t(torch.sqrt(1-self.alpha_bar), t, x.size())
             sqrt_recip_alpha_t = self.extract_t(sqrt_recip_alphas, t, x.size())
             
             # Obtain model mean 
-            model_mean = sqrt_recip_alpha_t * (x - beta_t * model(x, t) / sqrt_1min_alpha_t)
+            device = cond_mr.get_device()
+            x = x.to(device)
+            concat_img = torch.cat((x,cond_mr), axis = 1).float().to(device)
+            model_mean = sqrt_recip_alpha_t * (x - beta_t * model(concat_img, t) / sqrt_1min_alpha_t)
             
             if t_index == 0: 
                 return model_mean 
@@ -195,7 +200,7 @@ class Diffusion(nn.Module):
         
                 return x_t_1
     
-    def p_sample_loop(self, model, shape):
+    def p_sample_loop(self, model, shape, cond_mr):
         
         device = next(model.parameters()).device
         b = shape[0]
@@ -204,13 +209,37 @@ class Diffusion(nn.Module):
         imgs = []
 
         for i in tqdm(reversed(range(0, self.timesteps)), desc='sampling loop time step', total=self.timesteps):
-            img = self.p_sample(model, img, torch.full((b,), i, device=device, dtype=torch.long), i)
+            img = self.p_sample(model, img, cond_mr, torch.full((b,), i, device=device, dtype=torch.long), i)
             imgs.append(img.cpu().numpy())
         return imgs
 
-    def sample(self, model, image_size, batch_size=1, channels = 2):
-        return self.p_sample_loop(model, shape=(batch_size, channels, image_size, image_size))
+    def sample(self, model, image_size, cond_mr):
         
+        return self.p_sample_loop(model, image_size, cond_mr)
+     
+    def p_loss(self, model, x_start, cond_mr, t, noise=None, loss_type = 'l1'):
+        """
+        A loss function that computes loss between predicted and output noise 
+        """
+        if noise is None:
+            noise = torch.randn_like(x_start)
+
+        #Obtain noisy image of x, given start x
+        x_noisy = self.q_sample(x_start, t=t, noise=noise)
+        concat_img = torch.cat((x_noisy,cond_mr), axis = 1).float().to(device)
+        pred_noise = model(concat_img, t)
+        
+        if loss_type == 'l1':
+            loss = torch.nn.functional.l1_loss(pred_noise, noise)
+        elif loss_type == 'l2':
+            loss = torch.nn.functional.mse_loss(pred_noise, noise)
+        elif loss_type == 'huber':
+            loss = torch.nn.functional.smooth_l1_loss(pred_noise, noise)
+        else:
+            raise NotImplementedError()
+        
+        return loss  
+    
 class DiffTrainer():
     """
     Trainer for training diffusion process 
@@ -232,4 +261,9 @@ class DiffTrainer():
         
         return loss 
     
-      
+results_folder = Path("./results")
+results_folder.mkdir(exist_ok = True)
+save_and_sample_every = 1000
+
+from torch.optim import Adam 
+device = "cuda" if torch.cuda.is_available() else "cpu"
