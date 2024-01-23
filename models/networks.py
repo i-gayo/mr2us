@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 import models.layers as layers # import model layers from Qianye's code 
 import math 
-from einops_exts import check_shape, rearrange_many
+#from einops_exts import check_shape, rearrange_many
 
 
 ######### simple transformnet based on unet architecture ########
