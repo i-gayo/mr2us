@@ -86,18 +86,22 @@ class MR_US_dataset(Dataset):
         upsample_method = torch.nn.Upsample(size = dims)
         if label: 
             
-            if len(img.size()) > 3:
+            if len(img.size()) > 4:
                 img_label = img[:,:,:,0]
             else:
                 img_label = img 
                 
-            # Choose only prostate gland label 
-            if len(img.size()) > 3:
-                img_label = img[:,:,:,0]
+            # # Choose only prostate gland label 
+            # if len(img.size()) > 3:
+            #     img_label = img[:,:,:,0]
+            # else:
+            #     img_label = img 
+            
+            if len(img.size()) == 4:
+                img_to_upsample = img_label.unsqueeze(0)
             else:
-                img_label = img 
-                
-            upsampled_img = upsample_method(img_label.unsqueeze(0).unsqueeze(0))
+                img_to_upsample = img_label.unsqueeze(0).unsqueeze(0)
+            upsampled_img = upsample_method(img_to_upsample)
         else:
             upsampled_img = upsample_method(img.unsqueeze(0).unsqueeze(0))
         
