@@ -5,6 +5,7 @@ import os
 from torch.utils.data import DataLoader, Dataset
 import torch 
 
+
 class MR_US_dataset(Dataset):
     
     """
@@ -136,10 +137,10 @@ class MR_US_dataset(Dataset):
     
 class US_dataset(Dataset):
     
-    def __init__(self, dir_name, mode = 'train', downsample = False, alligned = False, give_sim = False):
+    def __init__(self, dir_name, mode = 'train', downsample = False, alligned = False, sample_fair = False, give_sim = False):
         self.dir_name = dir_name 
         self.mode = mode 
-
+        self.sample_fair = sample_fair 
         # obtain list of names for us and mri labels 
         self.us_names = os.listdir(os.path.join(dir_name, mode, 'us_images'))
         self.us_label_names = os.listdir(os.path.join(dir_name, mode, 'us_labels'))
@@ -169,6 +170,8 @@ class US_dataset(Dataset):
             t_us = self.us_data[idx]
             t_us_labels = self.us_labels[idx]
         else: # Change view of us image to match mr first 
+            
+            # dimensions are 88 x 118 x 81 x 6 for US labels 
             t_us = torch.transpose(self.us_data[idx], 2,0)
             t_us_labels = torch.transpose(self.us_labels[idx], 2,0)
             
@@ -196,12 +199,28 @@ class US_dataset(Dataset):
         
         # Sample a slice and corresponding label 
         us_shape = us.size()
-        
+        #WITH_PROSTATE = [idx for idx in range(us_shape[-1]) if torch.any(us_label[:,:,idx] > 0)]
         # randomly sample US slice 
-        slice_idx = np.random.choice(np.arange(0,us_shape[-1]))
+        if self.sample_fair:
+            WITH_PROSTATE = [idx for idx in range(us_shape[-1]) if torch.any(us_label[:,:,idx] > 0)]
+            WITHOUT_PROSTATE = [idx for idx in range(us_shape[-1]) if not(torch.any(us_label[:,:,idx] > 0))]
+            # Find index of slices WITH prostate 
+            p = np.random.rand()
+            # Find index of slices WITHOUT prostate
+            if p < 0.5:
+                slice_idx = np.random.choice(WITH_PROSTATE)
+            else:
+                slice_idx = np.random.choice(WITHOUT_PROSTATE)
+            # if p < 0.5 : with prostate
+            
+            # if p > 0.5 : without prostate 
+        else:
+            slice_idx = np.random.choice(np.arange(0,us_shape[-1]))
+        
         #print(f"Slice idx {slice_idx}")
-        us_slice = us[:,:,slice_idx]
-        us_label_slice = us_label[:,:,slice_idx] # segmented slice 
+        # us is 1 x width x ehight x depth; so obtaining slingle slice
+        us_slice = us[:,:,:,slice_idx] # changed from [:,:,slice_idx]
+        us_label_slice = us_label[:,:,:,slice_idx] # segmented slice 
         us_label_classify = torch.tensor(1.0*(len(torch.unique(us_label_slice)) > 1)) # 1 if presence of prostate 
         
         return us_slice, us_label_slice, us_label_classify
@@ -210,18 +229,25 @@ class US_dataset(Dataset):
         upsample_method = torch.nn.Upsample(size = dims)
         if label: 
             
-            if len(img.size()) > 3:
-                img_label = img[:,:,:,0]
-            else:
-                img_label = img 
+            # Us size : 88 x 118 x 81 x 6 
+            if self.alligned == False:
+                img = img[:,:,:,0] # use only prostate label 
+            
+            # if len(img.size()) > 3:
+            #     img_label = img[:,:,:,0]
+            # else:
+            #     img_label = img 
                 
             # Choose only prostate gland label 
-            if len(img.size()) > 3:
-                img_label = img[:,:,:,0]
+            if len(img.size()) == 4:
+                img_label = img.unsqueeze(0)
             else:
-                img_label = img 
-                
-            upsampled_img = upsample_method(img_label.unsqueeze(0).unsqueeze(0))
+                img_label = img.unsqueeze(0).unsqueeze(0)
+            
+            # In the size : 1 x 1 x width x height x depth
+            upsampled_img = upsample_method(img_label)
+            #upsampled_img = upsample_method(img_to_upsample)
+            #upsampled_img = upsample_method(img_label.unsqueeze(0).unsqueeze(0))
         else:
             upsampled_img = upsample_method(img.unsqueeze(0).unsqueeze(0))
         
@@ -245,9 +271,10 @@ class US_dataset(Dataset):
 
 class MR_dataset(Dataset):
     
-    def __init__(self, dir_name, mode = 'train', downsample = False, alligned = False):
+    def __init__(self, dir_name, mode = 'train', downsample = False, alligned = False, sample_fair = False):
         self.dir_name = dir_name 
         self.mode = mode 
+        self.sample_fair = sample_fair
         
         # obtain list of names for us and mri labels 
         #self.us_names = os.listdir(os.path.join(dir_name, mode, 'us_images'))
@@ -311,15 +338,36 @@ class MR_dataset(Dataset):
         #us_shape = us.size()
         mr_shape = mr.size()
         
-        # randomly sample US slice 
-        slice_idx = np.random.choice(np.arange(0,mr_shape[-1]))
+        if self.sample_fair:
+            WITH_PROSTATE = [idx for idx in range(mr_shape[-1]) if torch.any(mr_label[:,:,idx] > 0)]
+            WITHOUT_PROSTATE = [idx for idx in range(mr_shape[-1]) if not(torch.any(mr_label[:,:,idx] > 0))]
+            # Find index of slices WITH prostate 
+            p = np.random.rand()
+            # Find index of slices WITHOUT prostate
+            if p < 0.5:
+                print(f"Sampled with prostate")
+                slice_idx = np.random.choice(WITH_PROSTATE)
+            else:
+                print(f"Sampled without prostate")
+                slice_idx = np.random.choice(WITHOUT_PROSTATE)
+            # if p < 0.5 : with prostate
+            
+            # if p > 0.5 : without prostate 
+            
+            mr_slice = mr[:,:,:,slice_idx]
+            mr_label_slice = mr_label[:,:,:,slice_idx] # segmented slice 
+            mr_label_classify = torch.tensor(1.0*(len(torch.unique(mr_label_slice)) > 1)) # 1 if presence of prostate 
+
+            # RETURN slice with 50% chance with prostate, 50% no prostate 
+            return mr_slice, mr_label_slice, mr_label_classify
+    
+        else:
+            #slice_idx = np.random.choice(np.arange(0,mr_shape[-1]))
+            # Else : retutrn entire volume 
+            
+            return mr, mr_label
         
-        #print(f"Slice idx {slice_idx}")
-        mr_slice = mr[:,:,slice_idx]
-        mr_label_slice = mr_label[:,:,slice_idx] # segmented slice 
-        mr_label_classify = torch.tensor(1.0*(len(torch.unique(mr_label_slice)) > 1)) # 1 if presence of prostate 
-        
-        return mr_slice, mr_label_slice, mr_label_classify
+
     
     def resample(self, img, dims = (120,128,128), label = False):
         upsample_method = torch.nn.Upsample(size = dims)
@@ -360,9 +408,10 @@ class MR_dataset(Dataset):
 
 class US_dataset_withfake(Dataset):
     
-    def __init__(self, dir_name, mode = 'train', downsample = False, alligned = False):
+    def __init__(self, dir_name, mode = 'train', downsample = False, alligned = False, sample_fair = False):
         self.dir_name = dir_name 
         self.mode = mode 
+        self.sample_fair = sample_fair
 
         # obtain list of names for us and mri labels 
         self.us_names = os.listdir(os.path.join(dir_name, mode, 'us_images'))
@@ -429,32 +478,43 @@ class US_dataset_withfake(Dataset):
         # Sample a slice and corresponding label 
         us_shape = us.size()
         
-        # randomly sample US slice 
-        #slice_idx = np.random.choice(np.arange(0,us_shape[-1]))
-        #print(f"Slice idx {slice_idx}")
-        #us_slice = us[:,:,slice_idx]
-        #us_label_slice = us_label[:,:,slice_idx] # segmented slice 
-        #us_label_classify = torch.tensor(1.0*(len(torch.unique(us_label_slice)) > 1)) # 1 if presence of prostate 
-        #us_fake = fake_us[:,:,slice_idx] 
-        
-        return us, fake_us, us_label
+        # Sample fair; returns slice 50% with prostate, 50% without prostate 
+        if self.sample_fair:
+            WITH_PROSTATE = [idx for idx in range(us_shape[-1]) if torch.any(us_label[:,:,idx] > 0)]
+            WITHOUT_PROSTATE = [idx for idx in range(us_shape[-1]) if not(torch.any(us_label[:,:,idx] > 0))]
+            # Find index of slices WITH prostate 
+            p = np.random.rand()
+            # Find index of slices WITHOUT prostate
+            if p < 0.5:
+                # if p < 0.5 : with prostate
+                slice_idx = np.random.choice(WITH_PROSTATE)
+            else:
+                # if p > 0.5 : without prostate
+                slice_idx = np.random.choice(WITHOUT_PROSTATE)
+            
+            #print(f"Slice idx {slice_idx}")
+            us_slice = us[:,:,slice_idx]
+            fake_us_slice = fake_us[:,:,slice_idx]
+            us_label_slice = us_label[:,:,slice_idx] # segmented slice 
+            us_label_classify = torch.tensor(1.0*(len(torch.unique(us_label_slice)) > 1)) # 1 if presence of prostate 
+
+            return us_slice, fake_us_slice, us_label_classify
+            
+        else:
+            # Return entire volume 
+            return us, fake_us, us_label
     
     def resample(self, img, dims = (120,128,128), label = False):
         upsample_method = torch.nn.Upsample(size = dims)
         if label: 
             
-            if len(img.size()) > 3:
-                img_label = img[:,:,:,0]
+            if len(img.size()) > 4:
+                img_label = img[:,:,:,:,0]
             else:
                 img_label = img 
-                
-            # Choose only prostate gland label 
-            if len(img.size()) > 3:
-                img_label = img[:,:,:,0]
-            else:
-                img_label = img 
-                
-            upsampled_img = upsample_method(img_label.unsqueeze(0).unsqueeze(0))
+            
+            # Note : upsample method requires dimensions BATCH_SIZE X NUM_CHANNELS X H X W X D (1x1x120x128x128)
+            upsampled_img = upsample_method(img_label.unsqueeze(0))
         else:
             upsampled_img = upsample_method(img.unsqueeze(0).unsqueeze(0))
         
@@ -481,8 +541,10 @@ if __name__ == '__main__':
     
     #data_folder = '/Users/ianijirahmae/Documents/DATASETS/mri_us_paired'
     #data_folder = './Data'
-    data_folder = './evaluate/REGNET'
-    train_dataset = MR_US_dataset(data_folder, mode = 'train', downsample = True, alligned = True, get_2d = True)
+    #data_folder = './evaluate/REGNET'
+    
+    data_folder = './Data'
+    train_dataset = US_dataset(data_folder, mode = 'train', downsample = True, alligned = False ) #, get_2d = True)
     train_dataloader = DataLoader(train_dataset)
     
     for idx, (mr, us, mr_label, us_label) in enumerate(train_dataloader):
