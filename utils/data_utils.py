@@ -493,11 +493,21 @@ class US_dataset_withfake(Dataset):
                 slice_idx = np.random.choice(WITHOUT_PROSTATE)
             
             #print(f"Slice idx {slice_idx}")
-            us_slice = us[:,:,slice_idx]
-            fake_us_slice = fake_us[:,:,slice_idx]
-            us_label_slice = us_label[:,:,slice_idx] # segmented slice 
+            us_slice = us[:,:,:,slice_idx]
+            fake_us_slice = fake_us[:,:,:,slice_idx]
+            us_label_slice = us_label[:,:,:,slice_idx] # segmented slice 
             us_label_classify = torch.tensor(1.0*(len(torch.unique(us_label_slice)) > 1)) # 1 if presence of prostate 
-
+            
+            # for debuging:
+            
+            # from matplotlib import pyplot as plt 
+            # fig, axs = plt.subplots(1,2)
+            # axs[0].imshow(us_slice.squeeze())
+            # axs[0].axis('off')
+            # axs[1].imshow(fake_us_slice.squeeze())
+            # axs[1].axis('off')
+            # plt.savefig('TRANSFORM_IMGS/axial_test.png')
+            
             return us_slice, fake_us_slice, us_label_classify
             
         else:
