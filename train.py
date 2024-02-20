@@ -5,6 +5,7 @@ from torchmetrics.functional.image import structural_similarity_index_measure as
 from torch.utils.tensorboard import SummaryWriter
 import os 
 from torch.utils.data import DataLoader, Dataset
+from models.networks import TransformNet
 
 class RMSE_loss():
     """
@@ -19,7 +20,7 @@ class RMSE_loss():
         rmse = torch.sqrt(torch.mean((gt - pred)**2))
         
         return rmse 
-          
+       
 def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save_folder = 'model'):
     """
     A function that trains a model using dataset 
@@ -75,11 +76,11 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
             with torch.no_grad():
                 
                 # Compute SSIM 
-                ssim_metric = ssim(preds.to(torch.float64).squeeze(1), us)
+                ssim_metric = ssim(preds.to(torch.float64), us)
             
             loss_train.append(loss)
             ssim_train.append(ssim_metric)
-        
+            print(f"Epoch {epoch} step {idx}: mean loss : {loss.item()} ssim : {ssim_metric.item()}")
         # 6. Save metrics to dataloader ; evaluate on validation set every now and then 
         
         # Save to summary writer
@@ -107,7 +108,7 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
 
                     # Compute loss and ssim metrics 
                     loss_eval = loss_fn(us, preds.float())
-                    ssim_eval = ssim(preds.to(torch.float64).squeeze(1), us)
+                    ssim_eval = ssim(preds.to(torch.float64), us)
 
                     # Save to val losses 
                     loss_val.append(loss_eval)
@@ -133,22 +134,20 @@ def train_transformnet(model, train_dataset, val_dataset, use_cuda = False, save
 if __name__ == '__main__':
     
 
-    from networks.networks import TransformNet
-    
     # DEFINE HYPERPARAMETERS
     BATCH_SIZE = 2 
     
     # Define folder names and dataloaders 
-    data_folder = './Data'
-    train_dataset = MR_US_dataset(data_folder, mode = 'train')
+    data_folder = './evaluate/REGNET'
+    train_dataset = MR_US_dataset(data_folder, mode = 'train', alligned = True)
     train_dataloader = DataLoader(train_dataset, batch_size = BATCH_SIZE, shuffle = True)
-    val_dataset = MR_US_dataset(data_folder, mode = 'val')
+    val_dataset = MR_US_dataset(data_folder, mode = 'val', alligned = True)
     val_dataloader = DataLoader(val_dataset, batch_size = 1)
     
     # Define model  
     model = TransformNet()
     use_cuda = True
-    save_folder = 'BASELINE_v2'
+    save_folder = 'transformnet_alligned_v2' # saved folder is transfo
     
     train_transformnet(model, train_dataloader, val_dataloader, use_cuda = True, save_folder = save_folder)
     
