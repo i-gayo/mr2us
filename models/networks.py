@@ -36,7 +36,48 @@ class ResNet50(nn.Module):
         x = x.mean([2, 3])  # Global average pooling
         x = self.fc(x)
         return x
-    
+
+class ClassifierNet(nn.Module):
+    def __init__(self, num_input_channels=1, num_classes=1, base_model = 'efficientnet'):
+        super(ClassifierNet, self).__init__()
+        # Load the pre-trained ResNet-50 model
+        
+        self.base_model = base_model
+
+        if base_model == 'resnet':  
+            feature_extractor = models.resnet50(pretrained=True)
+            # Adjust the first convolutional layer to accept the specified number of input channels
+            self.conv1 = nn.Conv2d(num_input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+            self.conv1.weight.data = feature_extractor.conv1.weight.data[:, :num_input_channels, :, :]
+
+            # Use the remaining layers from the pre-trained ResNet-50
+            self.features = nn.Sequential(*list(feature_extractor.children())[1:-1])
+
+            # Add a custom fully connected layer for the specified number of classes
+            self.fc = nn.Linear(feature_extractor.fc.in_features, num_classes)
+
+        elif base_model == 'efficientnet':
+            
+            feature_extractor = models.efficientnet_b4(pretrained=True)
+            feature_extractor.features[0][0] = nn.Conv2d(num_input_channels, 48, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+            
+            # Use the remaining layers from the pre-trained EfficientNet
+            self.features = nn.Sequential(feature_extractor.features, nn.AdaptiveAvgPool2d(output_size=1) )
+            
+            # Add a custom fully connected layer for the specified number of classes
+            self.fc = nn.Linear(feature_extractor.classifier[1].in_features, num_classes)
+
+
+
+    def forward(self, x):
+        if self.base_model == 'resnet':
+            x = self.conv1(x)
+
+        x = self.features(x)
+        x = x.mean([2, 3])  # Global average pooling
+        x = self.fc(x)
+        return x
+     
 class UNet(nn.Module):
     """
     A network that performs image-to-image translation / transformation 
@@ -157,8 +198,10 @@ class UNet(nn.Module):
         # calculate padding required
         padding_size = torch.tensor(encoder.size()) - torch.tensor(decoder.size())
         pad_list = tuple([x for item in padding_size for x in (item, 0)][:])
+        #pad_list = tuple([(x // 2, x - x // 2) for x in padding_size])
         # Pad size: 0,0,0,0,0,0 only for 
-        padded_decoder = F.pad(decoder, (pad_list), 'constant', 0)
+        #pad_list = (0,0,1,0)
+        padded_decoder = F.pad(decoder, pad_list[::2], 'constant', 0)
         
         return padded_decoder 
 
